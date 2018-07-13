@@ -124,7 +124,7 @@ def get_xform_from_submission(xml, username, uuid=None):
         # try find the form by its uuid which is the ideal condition
         if XForm.objects.filter(
                 uuid=uuid, deleted_at__isnull=True).count() > 0:
-            xform = XForm.objects.get(uuid=uuid)
+            xform = XForm.objects.get(uuid=uuid, deleted_at__isnull=True)
 
             return xform
 
@@ -519,6 +519,7 @@ def publish_xml_form(xml_file, user, project, id_string=None, created_by=None):
         dd._mark_start_time_boolean()
         set_uuid(dd)
         dd._set_uuid_in_xml()
+        dd._set_hash()
         dd.save()
 
         return dd
@@ -533,6 +534,7 @@ def publish_xml_form(xml_file, user, project, id_string=None, created_by=None):
         dd._mark_start_time_boolean()
         set_uuid(dd)
         dd._set_uuid_in_xml(file_name=xml_file.name)
+        dd._set_hash()
         dd.save()
 
         return dd

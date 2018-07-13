@@ -1,24 +1,29 @@
+import datetime
 import json
-import requests
+import os
 from builtins import str
 
-from django_digest.test import DigestAuth
+from django.contrib.auth.models import User
 from django.db.models import signals
 from django.test.utils import override_settings
-from httmock import all_requests, HTTMock
+from django.utils.dateparse import parse_datetime
+
+import requests
+from django_digest.test import DigestAuth
+from httmock import HTTMock, all_requests
 from mock import patch
 
-from onadata.apps.api.tests.viewsets.test_abstract_viewset import\
+from onadata.apps.api.tests.viewsets.test_abstract_viewset import \
     TestAbstractViewSet
-from onadata.apps.api.viewsets.user_profile_viewset import UserProfileViewSet
-from onadata.apps.main.models import UserProfile
-from django.contrib.auth.models import User
-from onadata.libs.serializers.user_profile_serializer import (
-    _get_first_last_names)
 from onadata.apps.api.viewsets.connect_viewset import ConnectViewSet
-from onadata.libs.authentication import DigestAuthentication
-from onadata.apps.main.models.user_profile import\
+from onadata.apps.api.viewsets.user_profile_viewset import UserProfileViewSet
+from onadata.apps.logger.models.instance import Instance
+from onadata.apps.main.models import UserProfile
+from onadata.apps.main.models.user_profile import \
     set_kpi_formbuilder_permissions
+from onadata.libs.authentication import DigestAuthentication
+from onadata.libs.serializers.user_profile_serializer import \
+    _get_first_last_names
 
 
 def _profile_data():
@@ -55,7 +60,11 @@ class TestUserProfileViewSet(TestAbstractViewSet):
         response = self.view(request)
         self.assertNotEqual(response.get('Cache-Control'), None)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, [self.user_profile_data()])
+
+        data = self.user_profile_data()
+        del data['metadata']
+
+        self.assertEqual(response.data, [data])
 
     def test_user_profile_list(self):
         request = self.factory.post(
@@ -76,14 +85,17 @@ class TestUserProfileViewSet(TestAbstractViewSet):
             'url': 'http://testserver/api/v1/profiles/%s' % user_deno.username,
             'user': 'http://testserver/api/v1/users/%s' % user_deno.username,
             'gravatar': user_deno.profile.gravatar,
-            'metadata': {},
             'joined_on': user_deno.date_joined
         })
 
         self.assertEqual(response.status_code, 200)
+
+        user_profile_data = self.user_profile_data()
+        del user_profile_data['metadata']
+
         self.assertEqual(
             sorted([dict(d) for d in response.data], key=lambda x: x['id']),
-            sorted([self.user_profile_data(), deno_profile_data],
+            sorted([user_profile_data, deno_profile_data],
                    key=lambda x: x['id']))
         self.assertEqual(len(response.data), 2)
 
@@ -113,7 +125,11 @@ class TestUserProfileViewSet(TestAbstractViewSet):
         response = self.view(request)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
-        self.assertDictEqual(self.user_profile_data(), response.data[0])
+
+        user_profile_data = self.user_profile_data()
+        del user_profile_data['metadata']
+
+        self.assertDictEqual(user_profile_data, response.data[0])
 
         # authenicated user with blank users query param only gets his/her
         # profile
@@ -122,7 +138,7 @@ class TestUserProfileViewSet(TestAbstractViewSet):
         response = self.view(request)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data), 1)
-        self.assertDictEqual(self.user_profile_data(), response.data[0])
+        self.assertDictEqual(user_profile_data, response.data[0])
 
         # authenicated user with comma separated usernames as users query param
         # value gets profiles of the usernames provided
@@ -137,7 +153,6 @@ class TestUserProfileViewSet(TestAbstractViewSet):
             'url': 'http://testserver/api/v1/profiles/%s' % user_deno.username,
             'user': 'http://testserver/api/v1/users/%s' % user_deno.username,
             'gravatar': user_deno.profile.gravatar,
-            'metadata': {},
             'joined_on': user_deno.date_joined
         })
 
@@ -145,7 +160,7 @@ class TestUserProfileViewSet(TestAbstractViewSet):
         self.assertEqual(len(response.data), 2)
         self.assertEqual(
             [dict(i) for i in response.data],
-            [self.user_profile_data(), deno_profile_data]
+            [user_profile_data, deno_profile_data]
         )
 
     def test_profiles_get(self):
@@ -190,6 +205,7 @@ class TestUserProfileViewSet(TestAbstractViewSet):
         response = view(request, user='bob')
         data = self.user_profile_data()
         del data['email']
+        del data['metadata']
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, data)
@@ -553,7 +569,7 @@ class TestUserProfileViewSet(TestAbstractViewSet):
         request = self.factory.post('/', data=post_data, **self.extra)
         response = view(request, user='bob')
         user = User.objects.get(username__iexact=self.user.username)
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 204)
         self.assertTrue(user.check_password(new_password))
 
     def test_change_password_wrong_current_password(self):
@@ -821,3 +837,108 @@ class TestUserProfileViewSet(TestAbstractViewSet):
             with self.settings(KPI_FORMBUILDER_URL='http://test_formbuilder$'):
                 extra_data = {"username": "rust"}
                 self._login_user_and_profile(extra_post_data=extra_data)
+
+    def test_get_monthly_submissions(self):
+        """
+        Test getting monthly submissions for a user
+        """
+        view = UserProfileViewSet.as_view({'get': 'monthly_submissions'})
+        # publish form and make submissions
+        self._publish_xls_form_to_project()
+        self._make_submissions()
+        count1 = Instance.objects.filter(xform=self.xform).count()
+
+        request = self.factory.get('/', **self.extra)
+        response = view(request, user=self.user.username)
+        self.assertEquals(response.status_code, 200)
+        self.assertFalse(self.xform.shared)
+        self.assertEquals(response.data, {'private': count1})
+
+        # publish another form, make submission and make it public
+        self._publish_form_with_hxl_support()
+        self.assertEquals(self.xform.id_string, 'hxl_example')
+        count2 = Instance.objects.filter(xform=self.xform).filter(
+            date_created__year=datetime.datetime.now().year).filter(
+                date_created__month=datetime.datetime.now().month).filter(
+                    date_created__day=datetime.datetime.now().day).count()
+
+        self.xform.shared = True
+        self.xform.save()
+        request = self.factory.get('/', **self.extra)
+        response = view(request, user=self.user.username)
+        self.assertEquals(response.status_code, 200)
+        self.assertEquals(response.data, {'private': count1, 'public': count2})
+
+    def test_get_monthly_submissions_with_year_and_month_params(self):
+        """
+        Test passing both month and year params
+        """
+        view = UserProfileViewSet.as_view({'get': 'monthly_submissions'})
+        # publish form and make a submission dated 2013-02-18
+        self._publish_xls_form_to_project()
+        survey = self.surveys[0]
+        submission_time = parse_datetime('2013-02-18 15:54:01Z')
+        self._make_submission(
+            os.path.join(self.main_directory, 'fixtures', 'transportation',
+                         'instances', survey, survey + '.xml'),
+            forced_submission_time=submission_time)
+        count = Instance.objects.filter(xform=self.xform).filter(
+                date_created__month=2).filter(date_created__year=2013).count()
+
+        # get submission count and assert the response is correct
+        data = {'month': 2, 'year': 2013}
+        request = self.factory.get('/', data=data, **self.extra)
+        response = view(request, user=self.user.username)
+        self.assertEquals(response.status_code, 200)
+        self.assertFalse(self.xform.shared)
+        self.assertEquals(response.data, {'private': count})
+
+    def test_monthly_submissions_with_month_param(self):
+        """
+        Test that by passing only the value for month,
+        the year is assumed to be the current year
+        """
+        view = UserProfileViewSet.as_view({'get': 'monthly_submissions'})
+        month = datetime.datetime.now().month
+        year = datetime.datetime.now().year
+
+        # publish form and make submissions
+        self._publish_xls_form_to_project()
+        self._make_submissions()
+        count = Instance.objects.filter(xform=self.xform).filter(
+            date_created__year=year).filter(date_created__month=month).count()
+
+        data = {'month': month}
+        request = self.factory.get('/', data=data, **self.extra)
+        response = view(request, user=self.user.username)
+        self.assertEquals(response.status_code, 200)
+        self.assertFalse(self.xform.shared)
+        self.assertEquals(response.data, {'private': count})
+
+    def test_monthly_submissions_with_year_param(self):
+        """
+        Test that by passing only the value for year
+        the month is assumed to be the current month
+        """
+        view = UserProfileViewSet.as_view({'get': 'monthly_submissions'})
+        month = datetime.datetime.now().month
+
+        # publish form and make submissions dated the year 2013
+        # and the current month
+        self._publish_xls_form_to_project()
+        survey = self.surveys[0]
+        _time = parse_datetime('2013-' + str(month) + '-18 15:54:01Z')
+        self._make_submission(
+            os.path.join(self.main_directory, 'fixtures', 'transportation',
+                         'instances', survey, survey + '.xml'),
+            forced_submission_time=_time)
+        count = Instance.objects.filter(xform=self.xform).filter(
+                date_created__year=2013).filter(
+                    date_created__month=month).count()
+
+        data = {'year': 2013}
+        request = self.factory.get('/', data=data, **self.extra)
+        response = view(request, user=self.user.username)
+        self.assertEquals(response.status_code, 200)
+        self.assertFalse(self.xform.shared)
+        self.assertEquals(response.data, {'private': count})

@@ -1,8 +1,16 @@
+# -*- coding: utf-8 -*-
+"""
+UserProfileViewSet module.
+"""
+
+import datetime
 import json
 
-from past.builtins import basestring
+from past.builtins import basestring  # pylint: disable=redefined-builtin
 
 from django.conf import settings
+from django.core.validators import ValidationError
+from django.db.models import Count
 
 from rest_framework import serializers, status
 from rest_framework.decorators import detail_route
@@ -14,6 +22,7 @@ from rest_framework.viewsets import ModelViewSet
 
 from onadata.apps.api.permissions import UserProfilePermissions
 from onadata.apps.api.tools import get_baseviewset_class, load_class
+from onadata.apps.logger.models.instance import Instance
 from onadata.apps.main.models import UserProfile
 from onadata.libs import filters
 from onadata.libs.mixins.authenticate_header_mixin import \
@@ -21,45 +30,58 @@ from onadata.libs.mixins.authenticate_header_mixin import \
 from onadata.libs.mixins.cache_control_mixin import CacheControlMixin
 from onadata.libs.mixins.etags_mixin import ETagsMixin
 from onadata.libs.mixins.object_lookup_mixin import ObjectLookupMixin
+from onadata.libs.serializers.monthly_submissions_serializer import \
+    MonthlySubmissionsSerializer
 from onadata.libs.serializers.user_profile_serializer import \
     UserProfileSerializer
 
-BaseViewset = get_baseviewset_class()
+BaseViewset = get_baseviewset_class()  # pylint: disable=invalid-name
 
 
-def replace_key_value(k, v, expected_dict):
-    for a, b in expected_dict.items():
-        if k == a:
-            if isinstance(b, dict) and isinstance(v, dict):
-                b.update(v)
+def replace_key_value(lookup, new_value, expected_dict):
+    """
+    Replaces the value matching the key 'lookup' in the 'expected_dict' with
+    the new value 'new_value'.
+    """
+    for key, value in expected_dict.items():
+        if lookup == key:
+            if isinstance(value, dict) and isinstance(new_value, dict):
+                value.update(new_value)
             else:
-                expected_dict[a] = v
-        elif isinstance(b, dict):
-            expected_dict[a] = replace_key_value(k, v, b)
+                expected_dict[key] = new_value
+        elif isinstance(value, dict):
+            expected_dict[key] = replace_key_value(lookup, new_value, value)
     return expected_dict
 
 
-def check_if_key_exists(k, expected_dict):
-    for a, b in expected_dict.items():
-        if a == k:
+def check_if_key_exists(a_key, expected_dict):
+    """
+    Return True or False if a_key exists in the expected_dict dictionary.
+    """
+    for key, value in expected_dict.items():
+        if key == a_key:
             return True
-        elif isinstance(b, dict):
-            return check_if_key_exists(k, b)
-        elif isinstance(b, list):
-            for c in b:
-                if isinstance(c, dict):
-                    return check_if_key_exists(k, c)
+        elif isinstance(value, dict):
+            return check_if_key_exists(a_key, value)
+        elif isinstance(value, list):
+            for list_item in value:
+                if isinstance(list_item, dict):
+                    return check_if_key_exists(a_key, list_item)
     return False
 
 
 def serializer_from_settings():
+    """
+    Return a serilizer class configured in settings.PROFILE_SERIALIZER or
+    default to UserProfileSerializer.
+    """
     if settings.PROFILE_SERIALIZER:
         return load_class(settings.PROFILE_SERIALIZER)
 
     return UserProfileSerializer
 
 
-class UserProfileViewSet(AuthenticateHeaderMixin,
+class UserProfileViewSet(AuthenticateHeaderMixin,  # pylint: disable=R0901
                          CacheControlMixin, ETagsMixin,
                          ObjectLookupMixin, BaseViewset, ModelViewSet):
     """
@@ -67,7 +89,7 @@ class UserProfileViewSet(AuthenticateHeaderMixin,
     """
     queryset = UserProfile.objects.select_related().filter(
         user__is_active=True).exclude(
-        user__username__iexact=settings.ANONYMOUS_DEFAULT_USERNAME)
+            user__username__iexact=settings.ANONYMOUS_DEFAULT_USERNAME)
     serializer_class = serializer_from_settings()
     lookup_field = 'user'
     permission_classes = [UserProfilePermissions]
@@ -95,11 +117,11 @@ class UserProfileViewSet(AuthenticateHeaderMixin,
         filter_kwargs = {lookup_field: lookup}
 
         try:
-            pk = int(lookup)
+            user_pk = int(lookup)
         except (TypeError, ValueError):
             filter_kwargs = {'%s__iexact' % lookup_field: lookup}
         else:
-            filter_kwargs = {'user__pk': pk}
+            filter_kwargs = {'user__pk': user_pk}
 
         obj = get_object_or_404(queryset, **filter_kwargs)
 
@@ -109,7 +131,10 @@ class UserProfileViewSet(AuthenticateHeaderMixin,
         return obj
 
     @detail_route(methods=['POST'])
-    def change_password(self, request, *args, **kwargs):
+    def change_password(self, request, user):  # pylint: disable=W0613
+        """
+        Change user's password.
+        """
         user_profile = self.get_object()
         current_password = request.data.get('current_password', None)
         new_password = request.data.get('new_password', None)
@@ -119,7 +144,7 @@ class UserProfileViewSet(AuthenticateHeaderMixin,
                 user_profile.user.set_password(new_password)
                 user_profile.user.save()
 
-                return Response(status=status.HTTP_200_OK)
+                return Response(status=status.HTTP_204_NO_CONTENT)
 
         return Response(status=status.HTTP_400_BAD_REQUEST)
 
@@ -133,11 +158,11 @@ class UserProfileViewSet(AuthenticateHeaderMixin,
             else:
                 metadata_items = request.data.get('metadata').items()
 
-            for a, b in metadata_items:
-                if check_if_key_exists(a, metadata):
-                    metadata = replace_key_value(a, b, metadata)
+            for key, value in metadata_items:
+                if check_if_key_exists(key, metadata):
+                    metadata = replace_key_value(key, value, metadata)
                 else:
-                    metadata[a] = b
+                    metadata[key] = value
 
             profile.metadata = metadata
             profile.save()
@@ -145,3 +170,33 @@ class UserProfileViewSet(AuthenticateHeaderMixin,
 
         return super(UserProfileViewSet, self).partial_update(request, *args,
                                                               **kwargs)
+
+    @detail_route(methods=['GET'])
+    def monthly_submissions(self, request, *args, **kwargs):
+        """ Get the total number of submissions for a user """
+        profile = self.get_object()
+        month_param = self.request.query_params.get('month', None)
+        year_param = self.request.query_params.get('year', None)
+
+        # check if parameters are valid
+        if month_param:
+            if not month_param.isdigit() or \
+               int(month_param) not in range(1, 13):
+                raise ValidationError(u'Invalid month provided as parameter')
+        if year_param:
+            if not year_param.isdigit() or len(year_param) != 4:
+                raise ValidationError(u'Invalid year provided as parameter')
+
+        # Use query parameter values for month and year
+        # if none, use the current month and year
+        now = datetime.datetime.now()
+        month = month_param if month_param else now.month
+        year = year_param if year_param else now.year
+
+        instance_count = Instance.objects.filter(
+            xform__user=profile.user, xform__deleted_at__isnull=True,
+            date_created__year=year, date_created__month=month).values(
+                'xform__shared').annotate(num_instances=Count('id'))
+
+        serializer = MonthlySubmissionsSerializer(instance_count, many=True)
+        return Response(serializer.data[0])
