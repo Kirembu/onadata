@@ -1,14 +1,49 @@
 Changelog for onadata
 =====================
 
+1.14.6 (2018-09-03)
+-------------------
+
+- Track password edits.
+  `Issue #1456 <https://github.com/onaio/onadata/pull/1456>`_
+  [lincmba]
+
+- Enable email verification for accounts created via API,
+  `Issue #1442 <https://github.com/onaio/onadata/pull/1442>`_
+  [ivermac]
+
+- Raise Validation Error when merging forms if there is a PyXFormError
+  exception raised.
+  `Issue #1153 <https://github.com/onaio/onadata/issues/1153>`_
+  [ukanga]
+
+- Update requirements/s3.pip
+  `Issue #1465 <https://github.com/onaio/onadata/pull/1465>`_
+  [ukanga]
+
+
+1.14.5 (2018-08-15)
+-------------------
+
+- Fix Image resize() function to use file object directly.
+  `Issue #1439 <https://github.com/onaio/onadata/pull/1439>`_
+  [wambere]
+
+- CSV upload updates
+  `Issue #1444 <https://github.com/onaio/onadata/pull/1444>`_
+  [ukanga]
+
+- Updated/upgraded packages
+
+
 1.14.4 (2018-06-21)
 -------------------
 
--  Support exporting labels for selects in the data.
+- Support exporting labels for selects in the data.
   `Issue 1427 <https://github.com/onaio/onadata/issues/1427>`_
   [ukanga]
 
--  Handle UnreadablePostError exception in submissions..
+- Handle UnreadablePostError exception in submissions..
   `Issue 847 <https://github.com/onaio/onadata/issues/847>`_
   [ukanga]
 
@@ -44,7 +79,7 @@ Changelog for onadata
   `Issue 1416 <https://github.com/onaio/onadata/issues/1416>`_
   [ukanga]
 
--  Return flow results response timestamp in rfc3339 format explicitly
+- Return flow results response timestamp in rfc3339 format explicitly
   `Issue 1420 <https://github.com/onaio/onadata/issues/1420>`_
   [ukanga]
 

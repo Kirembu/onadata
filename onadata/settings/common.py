@@ -109,6 +109,8 @@ ENKETO_API_TOKEN = ''
 ENKETO_API_INSTANCE_IFRAME_URL = ENKETO_URL + "api_v2/instance/iframe"
 ENKETO_API_SALT = 'secretsalt'
 VERIFY_SSL = True
+ENKETO_AUTH_COOKIE = '__enketo'
+ENKETO_META_UID_COOKIE = '__enketo_meta_uid'
 
 # Login URLs
 LOGIN_URL = '/accounts/login/'
@@ -210,6 +212,7 @@ INSTALLED_APPS = (
     'reversion',
     'actstream',
     'onadata.apps.messaging.apps.MessagingConfig',
+    'django_celery_results',
 )
 
 OAUTH2_PROVIDER = {
@@ -427,8 +430,12 @@ THUMB_ORDER = ['large', 'medium', 'small']
 IMG_FILE_TYPE = 'jpg'
 
 # celery
+CELERY_RESULT_BACKEND = 'django-db'
 CELERY_TASK_ALWAYS_EAGER = False
+CELERY_TASK_IGNORE_RESULT = False
+CELERY_TASK_TRACK_STARTED = True
 CELERY_IMPORTS = ('onadata.libs.utils.csv_import',)
+
 
 CSV_FILESIZE_IMPORT_ASYNC_THRESHOLD = 100000  # Bytes
 GOOGLE_SHEET_UPLOAD_BATCH = 1000
@@ -544,3 +551,7 @@ try:
     from local_settings import *  # noqa
 except ImportError:
     pass
+
+# email verification
+ENABLE_EMAIL_VERIFICATION = False
+VERIFIED_KEY_TEXT = 'ALREADY_ACTIVATED'

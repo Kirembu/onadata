@@ -75,6 +75,11 @@ from onadata.libs.utils.viewer_tools import (enketo_url,
                                              get_form_url)
 from onadata.libs.exceptions import EnketoError
 
+ENKETO_AUTH_COOKIE = getattr(settings, 'ENKETO_AUTH_COOKIE',
+                             '__enketo')
+ENKETO_META_UID_COOKIE = getattr(settings, 'ENKETO_META_UID_COOKIE',
+                                 '__enketo_meta_uid')
+
 BaseViewset = get_baseviewset_class()
 
 
@@ -147,23 +152,24 @@ def get_survey_xml(csv_name):
 
 
 def set_enketo_signed_cookies(resp, username=None, json_web_token=None):
+    """Set signed cookies for JWT token in the HTTPResponse resp object.
+    """
     if not username and not json_web_token:
         return
 
     max_age = 30 * 24 * 60 * 60 * 1000
-
-    __enketo_meta_uid = {'max_age': max_age, 'salt': settings.ENKETO_API_SALT}
-    __enketo = {'secure': False, 'salt': settings.ENKETO_API_SALT}
+    enketo_meta_uid = {'max_age': max_age, 'salt': settings.ENKETO_API_SALT}
+    enketo = {'secure': False, 'salt': settings.ENKETO_API_SALT}
 
     # add domain attribute if ENKETO_AUTH_COOKIE_DOMAIN is set in settings
     # i.e. don't add in development environment because cookie automatically
     # assigns 'localhost' as domain
     if getattr(settings, 'ENKETO_AUTH_COOKIE_DOMAIN', None):
-        __enketo_meta_uid['domain'] = settings.ENKETO_AUTH_COOKIE_DOMAIN
-        __enketo['domain'] = settings.ENKETO_AUTH_COOKIE_DOMAIN
+        enketo_meta_uid['domain'] = settings.ENKETO_AUTH_COOKIE_DOMAIN
+        enketo['domain'] = settings.ENKETO_AUTH_COOKIE_DOMAIN
 
-    resp.set_signed_cookie('__enketo_meta_uid', username, **__enketo_meta_uid)
-    resp.set_signed_cookie('__enketo', json_web_token, **__enketo)
+    resp.set_signed_cookie(ENKETO_META_UID_COOKIE, username, **enketo_meta_uid)
+    resp.set_signed_cookie(ENKETO_AUTH_COOKIE, json_web_token, **enketo)
 
     return resp
 
@@ -572,18 +578,21 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
             if csv_file is None:
                 resp.update({u'error': u'csv_file field empty'})
             else:
+                overwrite = request.query_params.get('overwrite')
+                overwrite = True \
+                    if overwrite and overwrite.lower() == 'true' else False
                 size_threshold = settings.CSV_FILESIZE_IMPORT_ASYNC_THRESHOLD
                 if csv_file.size < size_threshold:
                     resp.update(submit_csv(request.user.username,
-                                           self.object, csv_file))
+                                           self.object, csv_file, overwrite))
                 else:
                     csv_file.seek(0)
                     upload_to = os.path.join(request.user.username,
                                              'csv_imports', csv_file.name)
                     file_name = default_storage.save(upload_to, csv_file)
                     task = submit_csv_async.delay(request.user.username,
-                                                  self.object,
-                                                  file_name)
+                                                  self.object.pk, file_name,
+                                                  overwrite)
                     if task is None:
                         raise ParseError('Task not found')
                     else:
@@ -615,7 +624,7 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
         if request.method == 'DELETE':
             xform = self.get_object()
             resp = {
-                u'job_uuid': tasks.delete_xform_async.delay(xform).task_id,
+                u'job_uuid': tasks.delete_xform_async.delay(xform.pk).task_id,
                 u'time_async_triggered': datetime.now()}
             resp_code = status.HTTP_202_ACCEPTED
 

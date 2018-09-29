@@ -9,6 +9,8 @@ from celery.result import AsyncResult
 from django.core.files.uploadedfile import (InMemoryUploadedFile,
                                             TemporaryUploadedFile)
 from django.utils.datastructures import MultiValueDict
+from django.conf import settings
+from django.core.mail import EmailMultiAlternatives
 
 from onadata.apps.api import tools
 from onadata.apps.logger.models.xform import XForm
@@ -57,7 +59,9 @@ def publish_xlsform_async(self, user, post_data, owner, file_data):
 
 
 @task()
-def delete_xform_async(xform):
+def delete_xform_async(xform_id):
+    """Soft delete an XForm asynchrounous task"""
+    xform = XForm.objects.get(pk=xform_id)
     xform.soft_delete()
 
 
@@ -73,3 +77,24 @@ def get_async_status(job_uuid):
         return {'JOB_STATUS': result}
 
     return result
+
+
+@task()
+def send_verification_email(email, message_txt, subject):
+    """
+    Sends a verification email
+    """
+    if any(a in [None, ''] for a in [email, message_txt, subject]):
+        raise ValueError(
+            "email, message_txt amd subject arguments are ALL required."
+        )
+
+    from_email = settings.DEFAULT_FROM_EMAIL
+    email_message = EmailMultiAlternatives(
+        subject,
+        message_txt,
+        from_email,
+        [email]
+    )
+
+    email_message.send()

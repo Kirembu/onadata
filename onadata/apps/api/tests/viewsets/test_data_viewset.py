@@ -1365,8 +1365,12 @@ class TestDataViewSet(TestBase):
 
         request = self.factory.delete('/', **self.extra)
         response = view(request, pk=formid, dataid=dataid)
-
         self.assertEqual(response.status_code, 204)
+
+        # second delete of same submission should return 404
+        request = self.factory.delete('/', **self.extra)
+        response = view(request, pk=formid, dataid=dataid)
+        self.assertEqual(response.status_code, 404)
 
         # remaining 3 submissions
         request = self.factory.get('/', **self.extra)
@@ -1538,6 +1542,7 @@ class TestDataViewSet(TestBase):
                         format='geojson')
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.xform.instances.count(), 4)
 
         test_geo = {
             'type': 'Feature',

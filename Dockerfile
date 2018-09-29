@@ -3,6 +3,13 @@ FROM ubuntu:16.04
 ENV DEBIAN_FRONTEND noninteractive
 ENV PYTHONUNBUFFERED 1
 
+RUN apt-get update -qq
+
+# For python 3.6
+RUN apt-get install -yqq software-properties-common \
+  && add-apt-repository ppa:jonathonf/python-3.6 \
+  && apt-get update -qq
+
 RUN apt-get update \
   && apt-get install -y postgresql-client \
     libproj-dev \
@@ -10,10 +17,10 @@ RUN apt-get update \
     memcached \
     libmemcached-dev \
     build-essential \
-    python \
-    python-pip \
+    python3.6 \
+    python3-pip \
     python-virtualenv \
-    python-dev \
+    python3.6-dev \
     git \
     libssl-dev \
     libpq-dev \
@@ -25,8 +32,8 @@ RUN apt-get update \
     zlib1g-dev \
     python-software-properties \
     ghostscript \
-    python-celery \
-    python-sphinx \
+    python3-celery \
+    python3-sphinx \
     openjdk-9-jre-headless \
     locales \
     pkg-config \

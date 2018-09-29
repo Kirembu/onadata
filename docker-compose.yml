@@ -11,8 +11,10 @@ services:
   queue:
     image: rabbitmq
   web:
-    build: .
-    image: onadata:master
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: onadata:py3
     volumes:
       - .:/srv/onadata
       - .inputrc:/home/onadata/.inputrc
@@ -23,4 +25,5 @@ services:
     depends_on:
       - db
       - queue
-
+    environment:
+      - SELECTED_PYTHON=python3.6
