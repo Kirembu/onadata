@@ -8,7 +8,6 @@ import csv
 import json
 import os
 import re
-from builtins import open
 from collections import OrderedDict
 from datetime import datetime
 from datetime import timedelta
@@ -16,6 +15,8 @@ from io import StringIO
 from xml.dom import Node
 from xml.dom import minidom
 
+import jwt
+from builtins import open
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
@@ -25,8 +26,6 @@ from django.http import HttpResponseRedirect
 from django.test.utils import override_settings
 from django.utils.dateparse import parse_datetime
 from django.utils.timezone import utc
-
-import jwt
 from django_digest.test import DigestAuth
 from httmock import HTTMock
 from mock import Mock, patch
@@ -1891,6 +1890,7 @@ class TestXFormViewSet(TestAbstractViewSet):
             post_data = {'csv_file': csv_import}
             request = self.factory.post('/', data=post_data, **self.extra)
             response = view(request, pk=self.xform.id)
+
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get('Cache-Control'), None)
             self.assertEqual(response.data.get('additions'), 9)
@@ -3123,23 +3123,23 @@ class TestXFormViewSet(TestAbstractViewSet):
                 '\ufeffage,\ufeffname,\ufeffmeta/instanceID,\ufeff_id,'
                 '\ufeff_uuid,\ufeff_submission_time,\ufeff_tags,\ufeff_notes,'
                 '\ufeff_version,\ufeff_duration,\ufeff_submitted_by,'
-                '\ufeff_total_media,\ufeff_media_count,\ufeff_review_status,'
-                '\ufeff_review_comment,\ufeff_media_all_received\n'
-                '\ufeff#age,,,,,,,,,,,,,,,\n29,'
+                '\ufeff_total_media,\ufeff_media_count,'
+                '\ufeff_media_all_received\n'
+                '\ufeff#age,,,,,,,,,,,,,\n29,'
                 '\ufeffLionel Messi,'
                 '\ufeffuuid:74ee8b73-48aa-4ced-9072-862f93d49c16,%s,'
                 '\ufeff74ee8b73-48aa-4ced-9072-862f93d49c16,'
                 '\ufeff2013-02-18T15:54:01,\ufeff,\ufeff,\ufeff201604121155,'
-                '\ufeff,\ufeffbob,0,0,n/a,n/a,True\n' % data_id)
+                '\ufeff,\ufeffbob,0,0,True\n' % data_id)
             expected_content_py3 = (
                 '\ufeffage,name,meta/instanceID,_id,_uuid,_submission_time,'
                 '_tags,_notes,_version,_duration,_submitted_by,_total_media,'
-                '_media_count,_review_status,_review_comment,'
-                '_media_all_received\n\ufeff#age,,,,,,,,,,,,,,,\n'
+                '_media_count,'
+                '_media_all_received\n\ufeff#age,,,,,,,,,,,,,\n'
                 '\ufeff29,Lionel Messi,'
                 'uuid:74ee8b73-48aa-4ced-9072-862f93d49c16,%s,'
                 '74ee8b73-48aa-4ced-9072-862f93d49c16,2013-02-18T15:54:01,,,'
-                '201604121155,,bob,0,0,n/a,n/a,True\n' % data_id)
+                '201604121155,,bob,0,0,True\n' % data_id)
             self.assertIn(content, [expected_content_py2,
                                     expected_content_py3])
             headers = dict(response.items())
@@ -3158,12 +3158,11 @@ class TestXFormViewSet(TestAbstractViewSet):
             expected_content = (
                 'age,name,meta/instanceID,_id,_uuid,_submission_time,_tags,'
                 '_notes,_version,_duration,_submitted_by,_total_media,'
-                '_media_count,_review_status,_review_comment,'
-                '_media_all_received\n'
-                '#age,,,,,,,,,,,,,,,\n'
+                '_media_count,_media_all_received\n'
+                '#age,,,,,,,,,,,,,\n'
                 '29,Lionel Messi,uuid:74ee8b73-48aa-4ced-9072-862f93d49c16'
                 ',%s,74ee8b73-48aa-4ced-9072-862f93d49c16,2013-02-18T15:54:01,'
-                ',,201604121155,,bob,0,0,n/a,n/a,True\n' % data_id
+                ',,201604121155,,bob,0,0,True\n' % data_id
             )
 
             self.assertEqual(expected_content, content)
@@ -3211,11 +3210,10 @@ class TestXFormViewSet(TestAbstractViewSet):
             expected_content = (
                 'age,name,meta/instanceID,_id,_uuid,_submission_time,_tags,'
                 '_notes,_version,_duration,_submitted_by,_total_media,'
-                '_media_count,_review_status,_review_comment,'
-                '_media_all_received\n'
+                '_media_count,_media_all_received\n'
                 '29,Lionel Messi,uuid:74ee8b73-48aa-4ced-9072-862f93d49c16,'
                 '%s,74ee8b73-48aa-4ced-9072-862f93d49c16,2013-02-18T15:54:01,,'
-                ',201604121155,,bob,0,0,n/a,n/a,True\n' % data_id
+                ',201604121155,,bob,0,0,True\n' % data_id
             )
             self.assertEqual(expected_content, content)
             headers = dict(response.items())
@@ -3233,16 +3231,13 @@ class TestXFormViewSet(TestAbstractViewSet):
             expected_content = (
                 'age,name,meta/instanceID,_id,_uuid,_submission_time,_tags,'
                 '_notes,_version,_duration,_submitted_by,_total_media,'
-                '_media_count,_review_status,_review_comment,'
-                '_media_all_received\n'
-                '#age,,,,,,,,,,,,,,,\n'
+                '_media_count,_media_all_received\n'
+                '#age,,,,,,,,,,,,,\n'
                 '29,Lionel Messi,uuid:74ee8b73-48aa-4ced-9072-862f93d49c16,'
                 '%s,74ee8b73-48aa-4ced-9072-862f93d49c16,2013-02-18T15:54:01'
-                ',,,201604121155,,bob,0,0,n/a,n/a,True\n' % data_id
+                ',,,201604121155,,bob,0,0,True\n' % data_id
             )
-
             self.assertEqual(expected_content, content)
-
             headers = dict(response.items())
             self.assertEqual(headers['Content-Type'], 'application/csv')
             content_disposition = headers['Content-Disposition']
@@ -4254,7 +4249,7 @@ class TestXFormViewSet(TestAbstractViewSet):
 
             request = self.factory.get('/', **alices_extra)
             response = view(request, pk=self.xform.pk, format='csv')
-            self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.status_code, 404)
 
     def test_csv_export_cache(self):
         with HTTMock(enketo_mock):
@@ -4410,3 +4405,19 @@ class TestXFormViewSet(TestAbstractViewSet):
                 response = view(request)
                 self.assertEqual(response.status_code, 201, response.data)
                 self.assertEqual(xforms + 1, XForm.objects.count())
+
+    def test_xls_import(self):
+        with HTTMock(enketo_mock):
+            xls_path = os.path.join(settings.PROJECT_ROOT, "apps", "main",
+                                    "tests", "fixtures", "tutorial.xls")
+            self._publish_xls_form_to_project(xlsform_path=xls_path)
+            view = XFormViewSet.as_view({'post': 'data_import'})
+            xls_import = fixtures_path('good.xls')
+
+            post_data = {'xls_file': xls_import}
+            request = self.factory.post('/', data=post_data, **self.extra)
+            response = view(request, pk=self.xform.id)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get('Cache-Control'), None)
+            self.assertEqual(response.data.get('additions'), 9)
+            self.assertEqual(response.data.get('updates'), 0)

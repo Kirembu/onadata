@@ -1,15 +1,12 @@
 from collections import OrderedDict
 from itertools import chain
 
-from future.utils import iteritems
-
-from past.builtins import basestring
-
+import unicodecsv as csv
 from django.conf import settings
 from django.db.models.query import QuerySet
 from django.utils.translation import ugettext as _
-
-import unicodecsv as csv
+from future.utils import iteritems
+from past.builtins import basestring
 from pyxform.question import Question
 from pyxform.section import RepeatingSection, Section
 
@@ -150,7 +147,7 @@ class AbstractDataFrameBuilder(object):
     # fields NOT within the form def that we want to include
     ADDITIONAL_COLUMNS = [
         ID, UUID, SUBMISSION_TIME, TAGS, NOTES, VERSION, DURATION,
-        SUBMITTED_BY, TOTAL_MEDIA, MEDIA_COUNT, REVIEW_STATUS, REVIEW_COMMENT,
+        SUBMITTED_BY, TOTAL_MEDIA, MEDIA_COUNT,
         MEDIA_ALL_RECEIVED]
     BINARY_SELECT_MULTIPLES = False
     VALUE_SELECT_MULTIPLES = False
@@ -166,7 +163,8 @@ class AbstractDataFrameBuilder(object):
                  include_images=True, include_hxl=False,
                  win_excel_utf8=False, total_records=None,
                  index_tags=DEFAULT_INDEX_TAGS, value_select_multiples=False,
-                 show_choice_labels=True, language=None):
+                 show_choice_labels=True, include_reviews=False,
+                 language=None):
 
         self.username = username
         self.id_string = id_string
@@ -180,6 +178,10 @@ class AbstractDataFrameBuilder(object):
         self.remove_group_name = remove_group_name
         self.extra_columns = (
             self.ADDITIONAL_COLUMNS + getattr(settings, 'EXTRA_COLUMNS', []))
+
+        if include_reviews:
+            self.extra_columns = self.extra_columns + [
+                REVIEW_STATUS, REVIEW_COMMENT]
 
         if xform:
             self.xform = xform
@@ -383,13 +385,16 @@ class CSVDataFrameBuilder(AbstractDataFrameBuilder):
                  include_images=False, include_hxl=False,
                  win_excel_utf8=False, total_records=None,
                  index_tags=DEFAULT_INDEX_TAGS, value_select_multiples=False,
-                 show_choice_labels=False, language=None):
+                 show_choice_labels=False, include_reviews=False,
+                 language=None):
+
         super(CSVDataFrameBuilder, self).__init__(
             username, id_string, filter_query, group_delimiter,
             split_select_multiples, binary_select_multiples, start, end,
             remove_group_name, xform, include_labels, include_labels_only,
             include_images, include_hxl, win_excel_utf8, total_records,
-            index_tags, value_select_multiples, show_choice_labels, language)
+            index_tags, value_select_multiples,
+            show_choice_labels, include_reviews, language)
 
         self.ordered_columns = OrderedDict()
 
@@ -533,11 +538,13 @@ class CSVDataFrameBuilder(AbstractDataFrameBuilder):
         if self.split_select_multiples:
             for key, choices in self.select_multiples.items():
                 # HACK to ensure choices are NOT duplicated
-                self.ordered_columns[key] = \
-                    remove_dups_from_list_maintain_order(
-                        [choice.replace('/' + name, '/' + label)
-                         if self.show_choice_labels else choice
-                         for choice, name, label in choices])
+                if key in self.ordered_columns.keys():
+                    self.ordered_columns[key] = \
+                        remove_dups_from_list_maintain_order(
+                            [choice.replace('/' + name, '/' + label)
+                             if self.show_choice_labels else choice
+                             for choice, name, label in choices])
+
         # add ordered columns for gps fields
         for key in self.gps_fields:
             gps_xpaths = self.dd.get_additional_geopoint_xpaths(key)
