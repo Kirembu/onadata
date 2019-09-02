@@ -11,6 +11,7 @@ from rest_framework import filters
 from onadata.apps.api.models import OrganizationProfile, Team
 from onadata.apps.logger.models import Instance, Project, XForm
 from onadata.libs.utils.numeric import int_or_parse_error
+from onadata.libs.utils.common_tags import MEDIA_FILE_TYPES
 
 
 class AnonDjangoObjectPermissionFilter(filters.DjangoObjectPermissionsFilter):
@@ -21,7 +22,7 @@ class AnonDjangoObjectPermissionFilter(filters.DjangoObjectPermissionsFilter):
         """
         form_id = view.kwargs.get(view.lookup_field)
         queryset = queryset.filter(deleted_at=None)
-        if request.user.is_anonymous():
+        if request.user.is_anonymous:
             return queryset
 
         if form_id and view.lookup_field == 'pk':
@@ -38,6 +39,22 @@ class AnonDjangoObjectPermissionFilter(filters.DjangoObjectPermissionsFilter):
                 return queryset.filter(Q(**xform_kwargs))
 
         return super(AnonDjangoObjectPermissionFilter, self)\
+            .filter_queryset(request, queryset, view)
+
+
+# pylint: disable=too-few-public-methods
+class EnketoAnonDjangoObjectPermissionFilter(AnonDjangoObjectPermissionFilter):
+    """EnketoAnonDjangoObjectPermissionFilter
+
+    Same as   AnonDjangoObjectPermissionFilter but checks 'report_xform'
+    permission when the view 'enketo' is accessed.
+    """
+
+    def filter_queryset(self, request, queryset, view):
+        """Check report_xform permission when requesting for Enketo URL."""
+        if view.action == 'enketo':
+            self.perm_format = '%(app_label)s.report_%(model_name)s'  # noqa pylint: disable=W0201
+        return super(EnketoAnonDjangoObjectPermissionFilter, self)\
             .filter_queryset(request, queryset, view)
 
 
@@ -63,8 +80,7 @@ class XFormListXFormPKFilter(object):
 
 
 class FormIDFilter(django_filter_filters.FilterSet):
-    formID = django_filter_filters.CharFilter(name="id_string",
-                                              lookup_expr='exact')
+    formID = django_filter_filters.CharFilter(field_name="id_string")
 
     class Meta:
         model = XForm
@@ -109,7 +125,7 @@ class XFormOwnerFilter(filters.BaseFilterBackend):
 class DataFilter(filters.DjangoObjectPermissionsFilter):
 
     def filter_queryset(self, request, queryset, view):
-        if request.user.is_anonymous():
+        if request.user.is_anonymous:
             return queryset.filter(Q(shared_data=True))
         return queryset
 
@@ -119,12 +135,12 @@ class InstanceFilter(django_filter_filters.FilterSet):
     Instance FilterSet implemented using django-filter
     """
     submitted_by__id = django_filter_filters.ModelChoiceFilter(
-        name='user',
+        field_name='user',
         queryset=User.objects.all(),
         to_field_name='id',
     )
     submitted_by__username = django_filter_filters.ModelChoiceFilter(
-        name='user',
+        field_name='user',
         queryset=User.objects.all(),
         to_field_name='username',
     )
@@ -179,7 +195,7 @@ class AnonUserProjectFilter(filters.DjangoObjectPermissionsFilter):
         user = request.user
         project_id = view.kwargs.get(view.lookup_field)
 
-        if user.is_anonymous():
+        if user.is_anonymous:
             return queryset.filter(Q(shared=True))
 
         if project_id:
@@ -230,7 +246,7 @@ class XFormPermissionFilterMixin(object):
             xform_qs = XForm.objects.all()
         xform_qs = xform_qs.filter(deleted_at=None)
 
-        if request.user.is_anonymous():
+        if request.user.is_anonymous:
             xforms = xform_qs.filter(shared_data=True)
         else:
             xforms = super(XFormPermissionFilterMixin, self).filter_queryset(
@@ -384,6 +400,19 @@ class AttachmentFilter(XFormPermissionFilterMixin,
         return queryset
 
 
+class AttachmentTypeFilter(filters.BaseFilterBackend):
+
+    def filter_queryset(self, request, queryset, view):
+        attachment_type = request.query_params.get('type')
+
+        mime_types = MEDIA_FILE_TYPES.get(attachment_type)
+
+        if mime_types:
+            queryset = queryset.filter(mimetype__in=mime_types)
+
+        return queryset
+
+
 class TeamOrgFilter(filters.BaseFilterBackend):
 
     def filter_queryset(self, request, queryset, view):
@@ -470,7 +499,7 @@ class UserProfileFilter(filters.BaseFilterBackend):
             if users:
                 users = users.split(',')
                 return queryset.filter(user__username__in=users)
-            elif not request.user.is_anonymous():
+            elif not request.user.is_anonymous:
                 return queryset.filter(user__username=request.user.username)
 
             return queryset.none()
@@ -501,7 +530,7 @@ class ExportFilter(XFormPermissionFilterMixin,
     def filter_queryset(self, request, queryset, view):
         has_submitted_by_key = (Q(options__has_key='query') &
                                 Q(options__query__has_key='_submitted_by'),)
-        if request.user.is_anonymous():
+        if request.user.is_anonymous:
             return self._xform_filter_queryset(
                 request, queryset, view, 'xform_id')\
                     .exclude(*has_submitted_by_key)
@@ -526,7 +555,7 @@ class ExportFilter(XFormPermissionFilterMixin,
 
 class PublicDatasetsFilter(object):
     def filter_queryset(self, request, queryset, view):
-        if request and request.user.is_anonymous():
+        if request and request.user.is_anonymous:
             return queryset.filter(shared=True)
 
         return queryset

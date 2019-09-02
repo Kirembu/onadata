@@ -23,6 +23,7 @@ from onadata.apps.api import tests as api_tests
 from onadata.apps.logger.models import Attachment, Instance, XForm
 from onadata.apps.main.tests.test_base import TestBase
 from onadata.apps.viewer.models.export import Export
+from onadata.apps.viewer.models.parsed_instance import query_data
 from onadata.libs.serializers.merged_xform_serializer import \
     MergedXFormSerializer
 from onadata.libs.utils.export_builder import (encode_if_str,
@@ -64,6 +65,15 @@ class TestExportTools(TestBase):
         row = {"datetime": datetime(2001, 9, 9)}
         date_str = encode_if_str(row, "datetime", True)
         self.assertEqual(date_str, '2001-09-09T00:00:00')
+
+        row = {"integer_value": 1}
+        integer_value = encode_if_str(
+            row, "integer_value", sav_writer=True)
+        self.assertEqual(integer_value, '1')
+
+        integer_value = encode_if_str(
+            row, "integer_value")
+        self.assertEqual(integer_value, 1)
 
     def test_generate_osm_export(self):
         filenames = [
@@ -493,6 +503,26 @@ class TestExportTools(TestBase):
         expected_data = {'fruit': {'orange': 'Orange', 'mango': 'Mango'}}
         self.assertEqual(export_builder._get_sav_value_labels(), expected_data)
 
+    def test_sav_choice_list_with_missing_values(self):
+        md = """
+        | survey |
+        |        | type              | name  | label |
+        |        | select one fruits | fruit | Fruit |
+
+        | choices |
+        |         | list name | name   | label  |
+        |         | fruits    | orange | Orange |
+        |         | fruits    | mango  |        |
+        """
+        survey = self.md_to_pyxform_survey(md)
+        export_builder = ExportBuilder()
+        export_builder.TRUNCATE_GROUP_TITLE = True
+        export_builder.set_survey(survey)
+        export_builder.INCLUDE_LABELS = True
+        export_builder.set_survey(survey)
+        expected_data = {'fruit': {'orange': 'Orange', 'mango': ''}}
+        self.assertEqual(export_builder._get_sav_value_labels(), expected_data)
+
     def test_get_sav_value_labels_multi_language(self):
         md = """
         | survey |
@@ -630,3 +660,72 @@ class TestExportTools(TestBase):
 
         with self.assertRaises(exceptions.ParseError):
             get_repeat_index_tags('p')
+
+    def test_generate_filtered_attachments_zip_export(self):
+        """Test media zip file export filters attachments"""
+        filenames = [
+            'OSMWay234134797.osm',
+            'OSMWay34298972.osm',
+        ]
+        osm_fixtures_dir = os.path.realpath(
+            os.path.join(
+                os.path.dirname(api_tests.__file__), 'fixtures', 'osm'))
+        paths = [
+            os.path.join(osm_fixtures_dir, filename) for filename in filenames
+        ]
+        xlsform_path = os.path.join(osm_fixtures_dir, 'osm.xlsx')
+        self._publish_xls_file_and_set_xform(xlsform_path)
+        submission_path = os.path.join(osm_fixtures_dir, 'instance_a.xml')
+        count = Attachment.objects.filter(extension='osm').count()
+        self._make_submission_w_attachment(submission_path, paths)
+        self._make_submission_w_attachment(submission_path, paths)
+        self.assertTrue(
+            Attachment.objects.filter(extension='osm').count() > count)
+
+        options = {
+            "extension": Export.ZIP_EXPORT,
+            "query": u'{"_submission_time": {"$lte": "2019-01-13T00:00:00"}}'}
+        filter_query = options.get("query")
+        instance_ids = query_data(
+            self.xform, fields='["_id"]', query=filter_query)
+
+        export = generate_attachments_zip_export(
+            Export.ZIP_EXPORT, self.user.username, self.xform.id_string, None,
+            options)
+
+        self.assertTrue(export.is_successful)
+
+        temp_dir = tempfile.mkdtemp()
+        zip_file = zipfile.ZipFile(default_storage.path(export.filepath), "r")
+        zip_file.extractall(temp_dir)
+        zip_file.close()
+
+        filtered_attachments = Attachment.objects.filter(
+            instance__xform_id=self.xform.pk).filter(
+            instance_id__in=[i_id['_id'] for i_id in instance_ids])
+
+        self.assertNotEqual(
+            Attachment.objects.count(), filtered_attachments.count())
+
+        for a in filtered_attachments:
+            self.assertTrue(
+                os.path.exists(os.path.join(temp_dir, a.media_file.name)))
+        shutil.rmtree(temp_dir)
+
+        # export with no query
+        options.pop('query')
+        export1 = generate_attachments_zip_export(
+            Export.ZIP_EXPORT, self.user.username, self.xform.id_string, None,
+            options)
+
+        self.assertTrue(export1.is_successful)
+
+        temp_dir = tempfile.mkdtemp()
+        zip_file = zipfile.ZipFile(default_storage.path(export1.filepath), "r")
+        zip_file.extractall(temp_dir)
+        zip_file.close()
+
+        for a in Attachment.objects.all():
+            self.assertTrue(
+                os.path.exists(os.path.join(temp_dir, a.media_file.name)))
+        shutil.rmtree(temp_dir)

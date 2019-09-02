@@ -4,7 +4,6 @@ data views.
 """
 import json
 import os
-import uuid
 from datetime import datetime
 from tempfile import NamedTemporaryFile
 from time import strftime, strptime
@@ -17,12 +16,12 @@ from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.core.files.storage import FileSystemStorage, get_storage_class
-from django.core.urlresolvers import reverse
 from django.http import (HttpResponse, HttpResponseBadRequest,
                          HttpResponseForbidden, HttpResponseNotFound,
                          HttpResponseRedirect)
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template import loader
+from django.urls import reverse
 from django.utils.translation import ugettext as _
 from django.views.decorators.http import require_POST
 from dpath import util as dpath_util
@@ -52,6 +51,7 @@ from onadata.libs.utils.user_auth import (get_xform_and_perms, has_permission,
                                           helper_auth_helper)
 from onadata.libs.utils.viewer_tools import (
     create_attachments_zipfile, export_def_from_filename, get_form)
+from onadata.libs.utils.common_tools import get_uuid
 
 
 def _get_start_end_submission_time(request):
@@ -244,7 +244,7 @@ def add_submission_with(request, username, id_string):
         'form_id': id_string,
         'server_url': openrosa_url,
         'instance': instance_xml,
-        'instance_id': uuid.uuid4().hex
+        'instance_id': get_uuid()
     }
 
     response = requests.post(
@@ -428,7 +428,7 @@ def create_export(request, username, id_string, export_type):
 
 def _get_google_credential(request):
     token = None
-    if request.user.is_authenticated():
+    if request.user.is_authenticated:
         storage = Storage(TokenStorageModel, 'id', request.user, 'credential')
         credential = storage.get()
     elif request.session.get('access_token'):
@@ -718,7 +718,7 @@ def google_xls_export(request, username, id_string):
     redirects to the uploaded google sheet.
     """
     token = None
-    if request.user.is_authenticated():
+    if request.user.is_authenticated:
         try:
             token_storage = TokenStorageModel.objects.get(id=request.user)
         except TokenStorageModel.DoesNotExist:
@@ -793,8 +793,8 @@ def attachment_url(request, size='medium'):
     if not media_file:
         return HttpResponseNotFound(_(u'Attachment not found'))
 
-    result = Attachment.objects.filter(media_file=media_file)[0:1]
-    if result.count() == 0:
+    result = Attachment.objects.filter(media_file=media_file).order_by()[0:1]
+    if not result:
         return HttpResponseNotFound(_(u'Attachment not found'))
     attachment = result[0]
 

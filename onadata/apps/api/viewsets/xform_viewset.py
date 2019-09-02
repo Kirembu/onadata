@@ -72,8 +72,10 @@ from onadata.libs.utils.string import str2bool
 from onadata.libs.utils.viewer_tools import (enketo_url,
                                              generate_enketo_form_defaults,
                                              get_enketo_preview_url,
-                                             get_form_url)
+                                             get_form_url,
+                                             get_enketo_single_submit_url)
 from onadata.libs.exceptions import EnketoError
+from onadata.settings.common import XLS_EXTENSIONS, CSV_EXTENSION
 
 ENKETO_AUTH_COOKIE = getattr(settings, 'ENKETO_AUTH_COOKIE',
                              '__enketo')
@@ -209,7 +211,7 @@ def parse_webform_return_url(return_url, request):
     # token to create signed cookies which will be used by subsequent
     # enketo calls to authenticate the user
     if jwt_param:
-        if request.user.is_anonymous():
+        if request.user.is_anonymous:
             api_token = authentication.get_api_token(jwt_param)
             if getattr(api_token, 'user'):
                 username = api_token.user.username
@@ -272,7 +274,7 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
     permission_classes = [XFormPermissions, ]
     updatable_fields = set(('description', 'downloadable', 'require_auth',
                             'shared', 'shared_data', 'title'))
-    filter_backends = (filters.AnonDjangoObjectPermissionFilter,
+    filter_backends = (filters.EnketoAnonDjangoObjectPermissionFilter,
                        filters.TagFilter,
                        filters.XFormOwnerFilter,
                        DjangoFilterBackend)
@@ -386,6 +388,9 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
 
     @action(methods=['GET'], detail=True)
     def enketo(self, request, **kwargs):
+        """Expose enketo urls."""
+        survey_type = self.kwargs.get('survey_type') or \
+            request.GET.get('survey_type')
         self.object = self.get_object()
         form_url = get_form_url(
             request, self.object.user.username, settings.ENKETO_PROTOCOL,
@@ -399,7 +404,8 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
             request_vars = request.GET
             defaults = generate_enketo_form_defaults(
                 self.object, **request_vars)
-            url = enketo_url(form_url, self.object.id_string, **defaults)
+            url = enketo_url(
+                form_url, self.object.id_string, **defaults)
             preview_url = get_enketo_preview_url(request,
                                                  self.object.user.username,
                                                  self.object.id_string,
@@ -407,9 +413,15 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
         except EnketoError as e:
             data = {'message': _(u"Enketo error: %s" % e)}
         else:
-            if url and preview_url:
+            if survey_type == 'single':
+                single_submit_url = get_enketo_single_submit_url(
+                    request, self.object.user.username, self.object.id_string,
+                    xform_pk=self.object.pk)
+                data = {"single_submit_url": single_submit_url}
+            elif url and preview_url:
                 http_status = status.HTTP_200_OK
-                data = {"enketo_url": url, "enketo_preview_url": preview_url}
+                data = {"enketo_url": url,
+                        "enketo_preview_url": preview_url}
 
         return Response(data, http_status)
 
@@ -582,12 +594,19 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
             csv_file = request.FILES.get('csv_file', None)
             xls_file = request.FILES.get('xls_file', None)
 
-            if xls_file:
-                csv_file = submission_xls_to_csv(xls_file)
+            if csv_file is None and xls_file is None:
+                resp.update({u'error': u'csv_file and xls_file field empty'})
 
-            if csv_file is None:
-                resp.update({u'error': u'csv_file field empty'})
+            elif xls_file and \
+                    xls_file.name.split('.')[-1] not in XLS_EXTENSIONS:
+                resp.update({u'error': u'xls_file not an excel file'})
+
+            elif csv_file and csv_file.name.split('.')[-1] != CSV_EXTENSION:
+                resp.update({u'error': u'csv_file not a csv file'})
+
             else:
+                if xls_file and xls_file.name.split('.')[-1] in XLS_EXTENSIONS:
+                    csv_file = submission_xls_to_csv(xls_file)
                 overwrite = request.query_params.get('overwrite')
                 overwrite = True \
                     if overwrite and overwrite.lower() == 'true' else False
@@ -642,6 +661,8 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
             csv_file = request.FILES.get('csv_file', None)
             if csv_file is None:
                 resp.update({u'error': u'csv_file field empty'})
+            elif csv_file.name.split('.')[-1] != CSV_EXTENSION:
+                resp.update({u'error': u'csv_file not a csv file'})
             else:
                 overwrite = request.query_params.get('overwrite')
                 overwrite = True \

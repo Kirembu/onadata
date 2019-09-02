@@ -1,8 +1,10 @@
 import os
 import re
+import sys
 import tempfile
 from builtins import str as text
 from datetime import datetime
+from hashlib import sha256
 from wsgiref.util import FileWrapper
 from xml.dom import Node
 from xml.parsers.expat import ExpatError
@@ -14,7 +16,7 @@ from django.contrib.auth.models import User
 from django.core.exceptions import (MultipleObjectsReturned, PermissionDenied,
                                     ValidationError)
 from django.core.files.storage import get_storage_class
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, transaction, DataError
 from django.db.models import Q
 from django.http import (HttpResponse, HttpResponseNotFound,
                          StreamingHttpResponse, UnreadablePostError)
@@ -22,9 +24,10 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.encoding import DjangoUnicodeDecodeError
 from django.utils.translation import ugettext as _
-from hashlib import sha256
 from modilabs.utils.subprocess_timeout import ProcessTimedOut
 from multidb.pinning import use_master
+from pyxform.errors import PyXFormError
+from pyxform.xform2json import create_survey_element_from_xml
 
 from onadata.apps.logger.models import Attachment, Instance, XForm
 from onadata.apps.logger.models.instance import (
@@ -39,10 +42,9 @@ from onadata.apps.logger.xform_instance_parser import (
 from onadata.apps.viewer.models.data_dictionary import DataDictionary
 from onadata.apps.viewer.models.parsed_instance import ParsedInstance
 from onadata.apps.viewer.signals import process_submission
+from onadata.libs.utils.common_tools import report_exception
 from onadata.libs.utils.model_tools import set_uuid
 from onadata.libs.utils.user_auth import get_user_default_project
-from pyxform.errors import PyXFormError
-from pyxform.xform2json import create_survey_element_from_xml
 
 OPEN_ROSA_VERSION_HEADER = 'X-OpenRosa-Version'
 HTTP_OPEN_ROSA_VERSION_HEADER = 'HTTP_X_OPENROSA_VERSION'
@@ -159,7 +161,7 @@ def _has_edit_xform_permission(xform, user):
 
 
 def check_edit_submission_permissions(request_user, xform):
-    if xform and request_user and request_user.is_authenticated():
+    if xform and request_user and request_user.is_authenticated:
         requires_auth = xform.user.profile.require_auth
         has_edit_perms = _has_edit_xform_permission(xform, request_user)
 
@@ -228,7 +230,9 @@ def save_attachments(xform, instance, media_files):
         filename = os.path.basename(f.name)
         media_in_submission = (
             filename in instance.get_expected_media() or
-            instance.xml.decode('utf-8').find(filename) != -1)
+            [instance.xml.decode('utf-8').find(filename) != -1 if
+             isinstance(instance.xml, bytes) else
+             instance.xml.find(filename) != -1])
         if media_in_submission:
             Attachment.objects.get_or_create(
                 instance=instance,
@@ -261,7 +265,7 @@ def save_submission(xform, xml, media_files, new_uuid, submitted_by, status,
         instance.save()
         pi, created = ParsedInstance.objects.get_or_create(instance=instance)
         if not created:
-            pi.save(async=False)
+            pi.save()  # noqa
 
     return instance
 
@@ -290,7 +294,7 @@ def create_instance(username,
     """
     instance = None
     submitted_by = request.user \
-        if request and request.user.is_authenticated() else None
+        if request and request.user.is_authenticated else None
 
     if username:
         username = username.lower()
@@ -334,6 +338,8 @@ def create_instance(username,
 
     try:
         with transaction.atomic():
+            if isinstance(xml, bytes):
+                xml = xml.decode('utf-8')
             instance = save_submission(xform, xml, media_files, new_uuid,
                                        submitted_by, status,
                                        date_created_override, checksum)
@@ -353,7 +359,6 @@ def create_instance(username,
             instance.save()
 
         instance = DuplicateInstance()
-
     return instance
 
 
@@ -399,10 +404,12 @@ def safe_create_instance(username, xml_file, media_files, uuid, request):
         error = OpenRosaResponseBadRequest(
             _(u"File likely corrupted during "
               u"transmission, please try later."))
-    except NonUniqueFormIdError as e:
+    except NonUniqueFormIdError:
         error = OpenRosaResponseBadRequest(
             _(u"Unable to submit because there are multiple forms with"
               u" this formID."))
+    except DataError as e:
+        error = OpenRosaResponseBadRequest((str(e)))
     if isinstance(instance, DuplicateInstance):
         response = OpenRosaResponse(_(u"Duplicate submission"))
         response.status_code = 202
@@ -410,7 +417,6 @@ def safe_create_instance(username, xml_file, media_files, uuid, request):
             response['Location'] = request.build_absolute_uri(request.path)
         error = response
         instance = None
-
     return [error, instance]
 
 
@@ -477,24 +483,26 @@ def publish_form(callback):
         return callback()
     except (PyXFormError, XLSFormError) as e:
         return {'type': 'alert-error', 'text': text(e)}
-    except IntegrityError as e:
+    except IntegrityError:
         return {
             'type': 'alert-error',
             'text': _(u'Form with this id or SMS-keyword already exists.'),
         }
-    except ProcessTimedOut as e:
+    except ProcessTimedOut:
         # catch timeout errors
         return {
             'type': 'alert-error',
             'text': _(u'Form validation timeout, please try again.'),
         }
-    except (MemoryError, OSError) as e:
+    except (MemoryError, OSError):
         return {
             'type': 'alert-error',
             'text': _((u'An error occurred while publishing the form. '
                        'Please try again.')),
         }
     except (AttributeError, Exception, ValidationError) as e:
+        report_exception("Form publishing exception: {}".format(e), text(e),
+                         sys.exc_info())
         return {'type': 'alert-error', 'text': text(e)}
 
 

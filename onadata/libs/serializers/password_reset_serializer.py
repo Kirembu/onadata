@@ -2,7 +2,7 @@ from builtins import bytes as b
 from future.moves.urllib.parse import urlparse
 
 from django.contrib.auth.models import User
-from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core.mail import send_mail
 from django.template import loader
 from django.utils.encoding import force_bytes
@@ -10,6 +10,21 @@ from django.utils.http import urlsafe_base64_decode
 from django.utils.http import urlsafe_base64_encode
 from django.utils.translation import ugettext_lazy as _
 from rest_framework import serializers
+
+
+class CustomPasswordResetTokenGenerator(PasswordResetTokenGenerator):
+    """Custom Password Token Generator Class."""
+    def _make_hash_value(self, user, timestamp):
+        # Include user email alongside user password to the generated token
+        # as the user state object that might change after a password reset
+        # to produce a token that invalidated.
+        login_timestamp = '' if user.last_login is None\
+            else user.last_login.replace(microsecond=0, tzinfo=None)
+        return str(user.pk) + user.password + user.email +\
+            str(login_timestamp) + str(timestamp)
+
+
+default_token_generator = CustomPasswordResetTokenGenerator()
 
 
 def get_password_reset_email(user, reset_url,
@@ -21,13 +36,13 @@ def get_password_reset_email(user, reset_url,
     result = urlparse(reset_url)
     site_name = domain = result.hostname
     encoded_username = urlsafe_base64_encode(
-        b(user.username.encode('utf-8')))
+        b(user.username.encode('utf-8'))).decode('utf-8')
     c = {
         'email': user.email,
         'domain': domain,
         'path': result.path,
         'site_name': site_name,
-        'uid': urlsafe_base64_encode(force_bytes(user.pk)),
+        'uid': urlsafe_base64_encode(force_bytes(user.pk)).decode('utf-8'),
         'username': user.username,
         'encoded_username': encoded_username,
         'token': token_generator.make_token(user),

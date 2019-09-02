@@ -7,6 +7,7 @@ import json
 import logging
 import sys
 import uuid
+from builtins import str as text
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime
@@ -14,7 +15,6 @@ from io import BytesIO
 
 import unicodecsv as ucsv
 import xlrd
-from builtins import str as text
 from celery import current_task, task
 from celery.backends.amqp import BacklogLimitExceeded
 from celery.result import AsyncResult
@@ -29,7 +29,9 @@ from multidb.pinning import use_master
 from onadata.apps.logger.models import Instance, XForm
 from onadata.libs.utils.async_status import (FAILED, async_status,
                                              celery_state_to_status)
-from onadata.libs.utils.common_tags import (MULTIPLE_SELECT_TYPE, EXCEL_TRUE)
+from onadata.libs.utils.common_tags import (MULTIPLE_SELECT_TYPE, EXCEL_TRUE,
+                                            XLS_DATE_FIELDS,
+                                            XLS_DATETIME_FIELDS)
 from onadata.libs.utils.common_tools import report_exception
 from onadata.libs.utils.dict_tools import csv_dict_to_nested_dict
 from onadata.libs.utils.logger_tools import (OpenRosaResponse, dict2xml,
@@ -54,16 +56,17 @@ def get_submission_meta_dict(xform, instance_id):
     :return: The metadata dict
     :rtype:  dict
     """
-    uuid_arg = 'uuid:{}'.format(instance_id or uuid.uuid4())
+    uuid_arg = instance_id or 'uuid:{}'.format(uuid.uuid4())
     meta = {'instanceID': uuid_arg}
 
     update = 0
 
-    if xform.instances.filter(uuid=instance_id).count() > 0:
+    if instance_id and xform.instances.filter(
+            uuid=instance_id.replace('uuid:', '')).count() > 0:
         uuid_arg = 'uuid:{}'.format(uuid.uuid4())
         meta.update({
             'instanceID': uuid_arg,
-            'deprecatedID': 'uuid:{}'.format(instance_id)
+            'deprecatedID': instance_id
         })
         update += 1
     return [meta, update]
@@ -240,14 +243,47 @@ def submit_csv(username, xform, csv_file, overwrite=False):
     ona_uuid = {'formhub': {'uuid': xform.uuid}}
     error = None
     additions = duplicates = inserts = 0
+
+    x_json = json.loads(xform.json)
+    xl_date_columns = [
+        dt.get('name') for dt in x_json.get('children')
+        if dt.get('type') in XLS_DATE_FIELDS]
+    xl_datetime_columns = [
+        dt.get('name') for dt in x_json.get('children')
+        if dt.get('type') in XLS_DATETIME_FIELDS]
+
     try:
         for row in csv_reader:
+            # convert some excel dates, replace / with -
+            for key in xl_date_columns:
+                try:
+                    date = datetime.strptime(row.get(key, ''), '%m/%d/%Y')
+                except ValueError:
+                    pass
+                else:
+                    str_date = datetime.strftime(date, '%Y-%m-%d')
+                    row.update({key: str_date})
+
+            # convert some excel dates time, replace / with -
+            for key in xl_datetime_columns:
+                try:
+                    date_time = datetime.strptime(
+                        row.get(key, ''), '%m/%d/%Y %H:%M')
+                except ValueError:
+                    pass
+                else:
+                    str_date_time = datetime.strftime(
+                        date_time, '%Y-%m-%dT%H:%M:%S.%f')
+                    row.update({key: str_date_time})
+
             # remove the additional columns
             for index in addition_col:
                 del row[index]
 
             # fetch submission uuid before purging row metadata
-            row_uuid = row.get('meta/instanceID') or row.get('_uuid')
+
+            row_uuid = row.get('meta/instanceID') or 'uuid:{}'.format(
+                row.get('_uuid')) if row.get('_uuid') else None
             submitted_by = row.get('_submitted_by')
             submission_date = row.get('_submission_time', submission_time)
 
@@ -371,7 +407,8 @@ def get_async_csv_submission_status(job_uuid):
         # result = (job.result or job.state)
         if job.state not in ['SUCCESS', 'FAILURE']:
             response = async_status(celery_state_to_status(job.state))
-            response.update(job.info)
+            if isinstance(job.info, dict):
+                response.update(job.info)
 
             return response
 

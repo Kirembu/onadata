@@ -16,15 +16,11 @@ import subprocess  # noqa, used by included files
 import sys
 from imp import reload
 
-from future.moves.urllib.parse import urljoin
-
-from past.builtins import basestring
-
+from celery.signals import after_setup_logger
 from django.core.exceptions import SuspiciousOperation
 from django.utils.log import AdminEmailHandler
-
-from celery.signals import after_setup_logger
-
+from future.moves.urllib.parse import urljoin
+from past.builtins import basestring
 
 # setting default encoding to utf-8
 if sys.version[0] == '2':
@@ -172,6 +168,7 @@ MIDDLEWARE = (
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'onadata.libs.utils.middleware.HTTPResponseNotAllowedMiddleware',
+    'onadata.libs.utils.middleware.OperationalErrorMiddleware',
 )
 
 LOCALE_PATHS = (os.path.join(PROJECT_ROOT, 'onadata.apps.main', 'locale'), )
@@ -427,7 +424,7 @@ THUMB_CONF = {
 }
 # order of thumbnails from largest to smallest
 THUMB_ORDER = ['large', 'medium', 'small']
-IMG_FILE_TYPE = 'jpg'
+DEFAULT_IMG_FILE_TYPE = 'jpg'
 
 # celery
 CELERY_RESULT_BACKEND = 'django-db'
@@ -439,6 +436,7 @@ CELERY_IMPORTS = ('onadata.libs.utils.csv_import',)
 
 CSV_FILESIZE_IMPORT_ASYNC_THRESHOLD = 100000  # Bytes
 GOOGLE_SHEET_UPLOAD_BATCH = 1000
+ZIP_REPORT_ATTACHMENT_LIMIT = 5242880000  # 500 MB in Bytes
 
 # duration to keep zip exports before deletion (in seconds)
 ZIP_EXPORT_COUNTDOWN = 3600  # 1 hour
@@ -555,3 +553,18 @@ except ImportError:
 # email verification
 ENABLE_EMAIL_VERIFICATION = False
 VERIFIED_KEY_TEXT = 'ALREADY_ACTIVATED'
+
+XLS_EXTENSIONS = ['xls', 'xlsx']
+
+CSV_EXTENSION = 'csv'
+
+PROJECT_QUERY_CHUNK_SIZE = 5000
+
+# Prevents "The number of GET/POST parameters exceeded" exception
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 10000000
+SECRET_KEY = 'mlfs33^s1l4xf6a36$0#j%dd*sisfoi&)&4s-v=91#^l01v)*j'
+
+# Time in minutes to lock out user from account
+LOCKOUT_TIME = 30 * 60
+MAX_LOGIN_ATTEMPTS = 10
+SUPPORT_EMAIL = "support@example.com"

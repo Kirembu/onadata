@@ -14,15 +14,15 @@ from builtins import open
 from collections import OrderedDict
 from ctypes import ArgumentError
 from io import BytesIO
-from past.builtins import basestring
-
-from django.conf import settings
-from django.core.files.temp import NamedTemporaryFile
 
 import xlrd
+from django.conf import settings
+from django.core.files.temp import NamedTemporaryFile
 from openpyxl import load_workbook
+from past.builtins import basestring
 from pyxform.builder import create_survey_from_xls
 from savReaderWriter import SavHeaderReader, SavReader
+
 from onadata.apps.logger.import_tools import django_file
 from onadata.apps.main.tests.test_base import TestBase
 from onadata.apps.viewer.models.data_dictionary import DataDictionary
@@ -2199,7 +2199,7 @@ class TestExportBuilder(TestBase):
             child, dd, ExportBuilder.GROUP_DELIMITER,
             ExportBuilder.TRUNCATE_GROUP_TITLE
         )
-        self.assertEqual(child.children, [])
+
         expected_choices = [
             {
                 '_label': 'King',
@@ -2849,3 +2849,57 @@ class TestExportBuilder(TestBase):
             ['Maria', 25, 'Mangue Pomme', 'Mangue', None, 'Pomme']]
 
         self.assertEqual(expected_result, result)
+
+    def test_mulsel_export_with_label_choices(self):
+        """test_mulsel_export_with_label_choices"""
+        md_xform = """
+        | survey |
+        |        | type                  | name         | label                                         | choice_filter               | # noqa
+        |        | select_multiple banks | banks_deal   | Which banks do you deal with?                 |                             | # noqa
+        |        | select_one primary    | primary_bank | Which bank do you consider your primary bank? | selected(${banks_deal}, cf) | # noqa
+        | choices |
+        |         | list_name | name | label              | cf |
+        |         | banks     | 1    | KCB                |    |
+        |         | banks     | 2    | Equity             |    | 
+        |         | banks     | 3    | Co-operative       |    |
+        |         | banks     | 4    | CBA                |    |
+        |         | banks     | 5    | Stanbic            |    |
+        |         | banks     | 6    | City Bank          |    |
+        |         | banks     | 7    | Barclays           |    |
+        |         | banks     | 8    | Standard Chattered |    |
+        |         | banks     | 9    | Other bank         |    |
+        |         | primary   | 1    | KCB                | 1  |
+        |         | primary   | 2    | Equity             | 2  |
+        |         | primary   | 3    | Co-operative       | 3  |
+        |         | primary   | 4    | CBA                | 4  |
+        |         | primary   | 5    | Stanbic            | 5  |
+        |         | primary   | 6    | City Bank          | 6  |
+        |         | primary   | 7    | Barclays           | 7  |
+        |         | primary   | 8    | Standard Chattered | 8  |
+        |         | primary   | 9    | Other bank         | 9  |
+        
+        """
+        survey = self.md_to_pyxform_survey(md_xform, {'name': 'data'})
+        export_builder = ExportBuilder()
+        export_builder.SHOW_CHOICE_LABELS = True
+        export_builder.SPLIT_SELECT_MULTIPLES = False
+        export_builder.VALUE_SELECT_MULTIPLES = True
+        export_builder.set_survey(survey)
+        temp_xls_file = NamedTemporaryFile(suffix='.xlsx')
+
+        data = [{
+            'banks_deal': '1 2 3 4',
+            'primary_bank': '3'
+        }]  # yapf: disable
+        export_builder.to_xls_export(temp_xls_file, data)
+        temp_xls_file.seek(0)
+        children_sheet = load_workbook(temp_xls_file)["data"]
+        self.assertTrue(children_sheet)
+
+        result = [[col.value for col in row[:2]]
+                  for row in children_sheet.rows]
+        expected_result = [
+            [u'banks_deal', u'primary_bank'],
+            [u'KCB Equity Co-operative CBA', u'Co-operative']]
+        temp_xls_file.close()
+        self.assertEqual(result, expected_result)

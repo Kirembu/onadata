@@ -1,5 +1,282 @@
-Changelog for onadata
+Changelog for Onadata
 =====================
+
+2.0.8 (2019-08-21)
+-------------------
+- Include media-type filter on media endpoint
+  `PR #1644 <https://github.com/onaio/onadata/issues/1644>`_
+  [@WinnyTroy]
+
+- Create count endpoint to get total number of attachments in media enpoint
+  `PR #1665 <https://github.com/onaio/onadata/pull/1665>`_
+  [@RayceeM]
+
+- Set rate limits on change password attempts
+  `PR #1675 <https://github.com/onaio/onadata/issues/1675>`_
+  [@RayceeM]
+
+- Override django inbuilt password reset token generation
+  `PR #1651 <https://github.com/onaio/onadata/issues/1651>`_
+  [@WinnyTroy]
+
+- Switch email headers attributes for user verification emails
+  `PR #1667 <https://github.com/onaio/onadata/issues/1667>`_
+  [@WinnyTroy]
+
+
+2.0.7 (2019-07-24)
+-------------------
+- Fix maximum recursion depth error on caching login attempts
+  `PR #1661 <https://github.com/onaio/onadata/issues/1661>`_
+  [@ukanga]
+
+
+2.0.6 (2019-07-17)
+-------------------
+- Handle negative number strings to number values correctly
+  `PR #1641 <https://github.com/onaio/onadata/issues/1641>`_
+  [@WinnyTroy]
+
+- Fix MemcachedKeyCharacterError error
+  `PR #1653 <https://github.com/onaio/onadata/issues/1653>`_
+  [@ukanga]
+
+
+2.0.5 (2019-07-15)
+-------------------
+- Replace load_class with Django's import_string function
+  `PR #1636 <https://github.com/onaio/onadata/issues/1636>`_
+  [@p-netm]
+
+- Set deleted_by user on submission deletions.
+  `PR #1640 <https://github.com/onaio/onadata/issues/1640>`_
+  [@WinnyTroy]
+
+- Handle OperationalError exceptions due to canceling statement due to conflicts
+  `PR #906 <https://github.com/onaio/onadata/issues/906>`_
+  [@WinnyTroy]
+
+- Prevent KeyError exceptions on missing labels for SPSS exports
+  `PR #1629 <https://github.com/onaio/onadata/issues/1629>`_
+  [@WinnyTroy]
+
+- Add attachment type filter on attachments endpoint
+  `PR #1644 <https://github.com/onaio/onadata/issues/1644>`_
+  [@WinnyTroy]
+
+
+2.0.4 (2019-06-13)
+-------------------
+- Only convert to string sav_writer values.
+  `PR #1621 <https://github.com/onaio/onadata/pull/1621>`_
+  [@lincmba]
+
+- Rate-Limit login attempts
+  `PR #1622 <https://github.com/onaio/onadata/pull/1622>`_
+  [@lincmba]
+
+- Allow blank notes in reviewing Approved/Pending submissions
+  `Fixes #1623 <https://github.com/onaio/onadata/issues/1623>`_
+  [@lincmba]
+
+- Fix TypeError on getting async csv import status
+  `Fixes #1624 <https://github.com/onaio/onadata/issues/1624>`_
+  [@lincmba]
+
+
+2.0.3 (2019-06-06)
+-------------------
+- Get rid of _async keyword on Parsed Instance save() method
+  `Fixes #1615 <https://github.com/onaio/onadata/pull/1618>`_
+  [@lincmba]
+
+- Pin temptoken authentication to master database
+  `Fixes #1616 <https://github.com/onaio/onadata/pull/1617>`_
+  [@lincmba]
+
+
+2.0.2 (2019-05-30)
+-------------------
+- Rename variables whose name is async
+  `Fixes #1608 <https://github.com/onaio/onadata/issues/1606>`_
+  [@ivermac ]
+
+- Process uid as string not binary
+  `Fixes #1610 <https://github.com/onaio/onadata/issues/1610>`_
+  [@lincmba ]
+
+
+
+2.0.1 (2019-05-28)
+-------------------
+- Remove message attribute from Exceptions
+  `Fixes #1609 <https://github.com/onaio/onadata/issues/1609>`_
+  [@lincmba]
+
+
+2.0.0 (2019-05-24)
+-------------------
+- Handle errors in custom renderers.
+  `Fixes #1598 <https://github.com/onaio/onadata/issues/1598>`_
+  [@lincmba]
+
+- Check report_xform permission on enketo URL requests
+  `PR #1602 <https://github.com/onaio/onadata/pull/1602>`_
+  [@ukanga]
+
+- Upgrade to django 2.0
+  `PR #1559 <https://github.com/onaio/onadata/pull/1559>`_
+  [@bmarika, @lincmba]
+
+1.19.4 (2019-04-08)
+-------------------
+- Expose submissions URL to Enketo.
+  `Pull #1526 <https://github.com/onaio/onadata/pull/1526>`_
+  [@WinnyTroy and @lincmba]
+
+- Load one image at a time in classic photo view.
+  `Fix #1560 <https://github.com/onaio/onadata/issues/1560>`_
+  [@lincmba]
+
+- Add transferproject command to transfer project between users.
+  `Issue #1491 <https://github.com/onaio/onadata/issues/1491>`_
+  [@bmarika]
+
+- Add MetaData.submission_review() function for submission reviews metadata.
+  `Fix #1585 <https://github.com/onaio/onadata/issues/1585>`_
+  [@lincmba]
+
+- Fixes on ZIP_REPORT_ATTACHMENT_LIMIT
+  `Fix #1592 <https://github.com/onaio/onadata/issues/1592>`_
+  [@lincmba]
+
+- Fix unicode TypeError on publishing text_xls_form strings.
+  `Fix #1593 <https://github.com/onaio/onadata/issues/1593>`_
+  [@ukanga]
+
+
+1.19.3 (2019-03-08)
+-----------------------
+- Convert excel date format to csv format
+  `Fixes #1577 <https://github.com/onaio/onadata/issues/1577>`_
+  [@lincmba]
+
+1.19.2 (2019-02-28)
+-----------------------
+- Optimize attachment query by removing sort and count
+  `PR #1578 <https://github.com/onaio/onadata/pull/1578>`_
+  [@ukanga]
+
+1.19.1 (2019-02-26)
+-----------------------
+
+- Fix TypeError on change_password when format is supplied on URL.
+  `PR #1572 <https://github.com/onaio/onadata/pull/1572>`_
+  [@bmarika]
+
+1.19.0 (2019-02-21)
+-----------------------
+
+- Fix Data Upload Failing
+  `Fixes #1561 <https://github.com/onaio/onadata/issues/1561>`_
+  [@lincmba]
+
+- Upgrade to pyxform version 0.13.1
+  `PR #1570 <https://github.com/onaio/onadata/pull/1570/files>`_
+  [@ukanga]
+
+1.18.1 (2019-02-07)
+-----------------------
+
+- Pick passed format or default to json in GenericRelatedField serializer
+  `PR #1558 <https://github.com/onaio/onadata/pull/1558>`_
+  [lincmba]
+
+1.18.0 (2019-01-24)
+-----------------------
+
+- Update to pyxform 0.12.2, performance regression fix.
+  `Fixes https://github.com/XLSForm/pyxform/issues/247 <https://github.com/XLSForm/pyxform/issues/247>`_
+  [ukanga]
+
+- Update projects endpoint API documentation.
+  `Fixes #1520 <https://github.com/onaio/onadata/issues/1520>`_
+  [lincmba]
+
+- Fix improperly configured URL exception.
+  `Fixes #1518 <https://github.com/onaio/onadata/issues/1518>`_
+  [lincmba]
+
+- Fix Wrong HTTP method on the project share end point
+  `Fixes #1520 <https://github.com/onaio/onadata/issues/1520>`_
+  [lincmba]
+
+- Fix files endpoint thumbnail not working for large png images
+  `Fixes #1509 <https://github.com/onaio/onadata/issues/1509>`_
+  [lincmba]
+
+- Fix recreating the same dataview
+  `Fixes #1498 <https://github.com/onaio/onadata/issues/1498>`_
+  [lincmba]
+
+- Make sure that when a project is deleted all forms are deleted
+  `Fixes #1494 <https://github.com/onaio/onadata/issues/1494>`_
+  [bmarika]
+
+- Return better error messages on invalid csv/xls imports
+  `Fixes #987 <https://github.com/onaio/onadata/issues/987>`_
+  [lincmba]
+
+- Filter media attachments exports
+  `Fixes #1028 <https://github.com/onaio/onadata/issues/1028>`_
+  [lincmba]
+
+- Remove empty optional fields in formList
+  `Fixes #1519 <https://github.com/onaio/onadata/issues/1519>`_
+  [lincmba]
+
+- Fix failing bulk csv edits
+  `Fixes #1540 <https://github.com/onaio/onadata/issues/1540>`_
+  [lincmba]
+
+- Fix TypeError at /api/v1/forms/[pk]/export_async.json
+  `Fixes #999 <https://github.com/onaio/onadata/issues/999>`_
+  [lincmba]
+
+- Handle DataError during XForms submission
+  `Fixes #949 <https://github.com/onaio/onadata/issues/949>`_
+  [bmarika]
+
+- Escape apostrophes in SQL queries
+  `Fixes #1525 <https://github.com/onaio/onadata/issues/1525>`_
+  [bmarika]
+
+- Upgrade kombu
+  `PR #1529 <https://github.com/onaio/onadata/pull/1529>`_
+  [lincmba]
+
+1.17.0 (2018-12-19)
+-------------------
+
+- Fix external Choices with number names
+  `Fixes #1485 <https://github.com/onaio/onadata/issues/1485>`_
+  [lincmba]
+
+- Remove link expiration message on verification email
+  `Fixes #1489 <https://github.com/onaio/onadata/issues/1489>`_
+  [lincmba]
+
+- Only generate hash for linked datasets
+  `Fixes #1411 <https://github.com/onaio/onadata/issues/1411>`_
+  [lincmba]
+
+- Fix merged dataset with deleted parent
+  `Fixes #1511 <https://github.com/onaio/onadata/issues/1511>`_
+  [lincmba]
+
+- Update/upgrade packages
+  `PR 1522 <https://github.com/onaio/onadata/pull/1522>`_
+  [lincmba, ukanga]
 
 1.16.0 (2018-12-06)
 -------------------

@@ -6,7 +6,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.postgres.fields import JSONField
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Prefetch
 from django.db.models.signals import post_save
 from django.utils import timezone
@@ -66,10 +66,12 @@ class Project(BaseModel):
 
     name = models.CharField(max_length=255)
     metadata = JSONField(default=dict)
-    organization = models.ForeignKey(settings.AUTH_USER_MODEL,
-                                     related_name='project_org')
-    created_by = models.ForeignKey(settings.AUTH_USER_MODEL,
-                                   related_name='project_owner')
+    organization = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name='project_org',
+        on_delete=models.CASCADE)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, related_name='project_owner',
+        on_delete=models.CASCADE)
     user_stars = models.ManyToManyField(settings.AUTH_USER_MODEL,
                                         related_name='project_stars')
     shared = models.BooleanField(default=False)
@@ -88,7 +90,6 @@ class Project(BaseModel):
         app_label = 'logger'
         unique_together = (('name', 'organization'),)
         permissions = (
-            ('view_project', "Can view project"),
             ('add_project_xform', "Can add xform to project"),
             ("report_project_xform", "Can make submissions to the project"),
             ('transfer_project', "Can transfer project to different owner"),
@@ -113,6 +114,7 @@ class Project(BaseModel):
     def user(self):
         return self.created_by
 
+    @transaction.atomic()
     def soft_delete(self, user=None):
         """
         Soft deletes a project by adding a deleted_at timestamp and renaming
@@ -158,10 +160,10 @@ post_save.connect(set_object_permissions, sender=Project,
 class ProjectUserObjectPermission(UserObjectPermissionBase):
     """Guardian model to create direct foreign keys."""
 
-    content_object = models.ForeignKey(Project)
+    content_object = models.ForeignKey(Project, on_delete=models.CASCADE)
 
 
 class ProjectGroupObjectPermission(GroupObjectPermissionBase):
     """Guardian model to create direct foreign keys."""
 
-    content_object = models.ForeignKey(Project)
+    content_object = models.ForeignKey(Project, on_delete=models.CASCADE)

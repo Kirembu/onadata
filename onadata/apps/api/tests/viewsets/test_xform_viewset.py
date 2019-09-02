@@ -4,10 +4,12 @@ Tests the XForm viewset.
 """
 from __future__ import unicode_literals
 
+import codecs
 import csv
 import json
 import os
 import re
+from builtins import open
 from collections import OrderedDict
 from datetime import datetime
 from datetime import timedelta
@@ -16,7 +18,6 @@ from xml.dom import Node
 from xml.dom import minidom
 
 import jwt
-from builtins import open
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
@@ -38,7 +39,8 @@ from onadata.apps.api.tests.mocked_data import (
     enketo_url_mock, external_mock, external_mock_single_instance,
     external_mock_single_instance2, xls_url_no_extension_mock,
     xls_url_no_extension_mock_content_disposition_attr_jumbled_v1,
-    xls_url_no_extension_mock_content_disposition_attr_jumbled_v2)
+    xls_url_no_extension_mock_content_disposition_attr_jumbled_v2,
+    enketo_single_submission_mock)
 from onadata.apps.api.tests.viewsets.test_abstract_viewset import \
     TestAbstractViewSet
 from onadata.apps.api.viewsets.project_viewset import ProjectViewSet
@@ -731,8 +733,11 @@ class TestXFormViewSet(TestAbstractViewSet):
                     response.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertEqual(response.data, data)
 
+    @override_settings(TESTING_MODE=False)
     def test_enketo_url(self):
-        with HTTMock(enketo_preview_url_mock, enketo_url_mock):
+        """Test functionality to expose enketo urls."""
+        with HTTMock(enketo_preview_url_mock, enketo_url_mock,
+                     enketo_single_submission_mock):
             self._publish_xls_form_to_project()
             view = XFormViewSet.as_view({
                 'get': 'enketo'
@@ -744,6 +749,45 @@ class TestXFormViewSet(TestAbstractViewSet):
             url = "https://enketo.ona.io/::YY8M"
             preview_url = "https://enketo.ona.io/preview/::YY8M"
             data = {"enketo_url": url, "enketo_preview_url": preview_url}
+            self.assertEqual(response.data, data)
+
+            alice_data = {'username': 'alice', 'email': 'alice@localhost.com'}
+            alice_profile = self._create_user_profile(alice_data)
+            credentials = {
+                'HTTP_AUTHORIZATION': (
+                    'Token %s' % alice_profile.user.auth_token)
+            }
+            request = self.factory.get('/', **credentials)
+            response = view(request, pk=formid)
+            # Alice has no permissions to the form hence no access to web form
+            self.assertEqual(response.status_code, 404)
+
+            # Give Alice read-only permissions to the form
+            ReadOnlyRole.add(alice_profile.user, self.xform)
+            response = view(request, pk=formid)
+            # Alice with read-only access should not have access to web form
+            self.assertEqual(response.status_code, 404)
+
+            # Give Alice data-entry permissions
+            DataEntryRole.add(alice_profile.user, self.xform)
+            response = view(request, pk=formid)
+            # Alice with data-entry access should have access to web form
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data, data)
+
+    def test_get_single_submit_url(self):
+        with HTTMock(enketo_preview_url_mock, enketo_url_mock,
+                     enketo_single_submission_mock):
+            self._publish_xls_form_to_project()
+            view = XFormViewSet.as_view({
+                'get': 'enketo'
+            })
+            formid = self.xform.pk
+            get_data = {'survey_type': 'single'}
+            request = self.factory.get('/', data=get_data, **self.extra)
+            response = view(request, pk=formid)
+            submit_url = "https://enketo.ona.io/single/::XZqoZ94y"
+            data = {"single_submit_url": submit_url}
             self.assertEqual(response.data, data)
 
     def test_enketo_url_with_default_form_params(self):
@@ -1462,7 +1506,7 @@ class TestXFormViewSet(TestAbstractViewSet):
 
             self.xform.refresh_from_db()
             self.assertFalse(self.xform.__getattribute__(key))
-            shared = [u'"String" is not a valid boolean.']
+            shared = [u'Must be a valid boolean.']
             self.assertEqual(response.data, {'public': shared})
 
     def test_set_form_bad_key(self):
@@ -3505,7 +3549,7 @@ class TestXFormViewSet(TestAbstractViewSet):
         self._create_dataview()
 
         data = {
-            'name': "My DataView",
+            'name': "Another DataView",
             'xform': 'http://testserver/api/v1/forms/%s' % self.xform.pk,
             'project': 'http://testserver/api/v1/projects/%s'
                        % self.project.pk,
@@ -3547,7 +3591,7 @@ class TestXFormViewSet(TestAbstractViewSet):
         # create dataview
         self._create_dataview()
         data = {
-            'name': "My DataView",
+            'name': "Another DataView",
             'xform': 'http://testserver/api/v1/forms/%s' % self.xform.pk,
             'project': 'http://testserver/api/v1/projects/%s'
                        % self.project.pk,
@@ -4421,3 +4465,60 @@ class TestXFormViewSet(TestAbstractViewSet):
             self.assertEqual(response.get('Cache-Control'), None)
             self.assertEqual(response.data.get('additions'), 9)
             self.assertEqual(response.data.get('updates'), 0)
+
+    def test_external_choice_integer_name_xlsform(self):
+        """Test that names with integers are converted to strings"""
+        with HTTMock(enketo_mock):
+            view = XFormViewSet.as_view({
+                'post': 'create'
+            })
+            path = os.path.join(
+                settings.PROJECT_ROOT, "apps", "api", "tests", "fixtures",
+                "integer_name_test.xlsx")
+            with open(path, 'rb') as xls_file:
+                # pylint: disable=no-member
+                meta_count = MetaData.objects.count()
+                post_data = {'xls_file': xls_file}
+                request = self.factory.post('/', data=post_data, **self.extra)
+                response = view(request)
+                self.assertEqual(response.status_code, 201)
+                self.assertEqual(meta_count + 3, MetaData.objects.count())
+                xform = self.user.xforms.all()[0]
+                metadata = MetaData.objects.get(
+                    object_id=xform.id, data_value='itemsets.csv')
+                self.assertIsNotNone(metadata)
+
+                csv_reader = csv.reader(
+                    codecs.iterdecode(metadata.data_file, 'utf-8'))
+                header = next(csv_reader)
+                name_index = header.index('name')
+                for row in csv_reader:
+                    try:
+                        int(row[name_index])
+                        self.assertTrue(isinstance(row[name_index], str))
+                    except ValueError:
+                        self.assertTrue(isinstance(row[name_index], str))
+
+    def test_csv_xls_import_errors(self):
+        with HTTMock(enketo_mock):
+            xls_path = os.path.join(settings.PROJECT_ROOT, "apps", "main",
+                                    "tests", "fixtures", "tutorial.xls")
+            self._publish_xls_form_to_project(xlsform_path=xls_path)
+            view = XFormViewSet.as_view({'post': 'data_import'})
+
+            csv_import = fixtures_path('good.csv')
+            xls_import = fixtures_path('good.xls')
+
+            post_data = {'xls_file': csv_import}
+            request = self.factory.post('/', data=post_data, **self.extra)
+            response = view(request, pk=self.xform.id)
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(
+                response.data.get('error'), 'xls_file not an excel file')
+
+            post_data = {'csv_file': xls_import}
+            request = self.factory.post('/', data=post_data, **self.extra)
+            response = view(request, pk=self.xform.id)
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(
+                response.data.get('error'), 'csv_file not a csv file')

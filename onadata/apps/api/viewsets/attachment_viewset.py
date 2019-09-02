@@ -6,6 +6,7 @@ from django.core.files.storage import default_storage
 from django.conf import settings
 from rest_framework import renderers
 from rest_framework import viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ParseError
 from rest_framework.response import Response
 
@@ -44,7 +45,7 @@ class AttachmentViewSet(AuthenticateHeaderMixin, CacheControlMixin, ETagsMixin,
     List attachments of viewsets.
     """
     content_negotiation_class = MediaFileContentNegotiation
-    filter_backends = (filters.AttachmentFilter,)
+    filter_backends = (filters.AttachmentFilter, filters.AttachmentTypeFilter)
     lookup_field = 'pk'
     queryset = Attachment.objects.filter(instance__deleted_at__isnull=True)
     permission_classes = (AttachmentObjectPermissions,)
@@ -53,7 +54,8 @@ class AttachmentViewSet(AuthenticateHeaderMixin, CacheControlMixin, ETagsMixin,
     renderer_classes = (
         renderers.JSONRenderer,
         renderers.BrowsableAPIRenderer,
-        MediaFileRenderer)
+        MediaFileRenderer,
+    )
 
     def retrieve(self, request, *args, **kwargs):
         self.object = self.get_object()
@@ -82,8 +84,16 @@ class AttachmentViewSet(AuthenticateHeaderMixin, CacheControlMixin, ETagsMixin,
 
         return Response(serializer.data)
 
+    @action(methods=['GET'], detail=False)
+    def count(self, request, *args, **kwargs):
+        data = {
+            "count":  self.filter_queryset(self.get_queryset()).count()
+            }
+
+        return Response(data=data)
+
     def list(self, request, *args, **kwargs):
-        if request.user.is_anonymous():
+        if request.user.is_anonymous:
             xform = request.query_params.get('xform')
             if xform:
                 xform = XForm.objects.get(id=xform)

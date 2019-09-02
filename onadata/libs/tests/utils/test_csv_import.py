@@ -2,11 +2,12 @@ from __future__ import unicode_literals
 
 import os
 import re
+from builtins import open
 from io import BytesIO
+from xml.etree.ElementTree import fromstring
 
 import mock
 import unicodecsv as ucsv
-from builtins import open
 from celery.backends.amqp import BacklogLimitExceeded
 from django.conf import settings
 
@@ -14,10 +15,11 @@ from onadata.apps.logger.models import Instance, XForm
 from onadata.apps.main.tests.test_base import TestBase
 from onadata.libs.utils import csv_import
 from onadata.libs.utils.csv_import import get_submission_meta_dict
+from onadata.libs.utils.user_auth import get_user_default_project
 
 
 def strip_xml_uuid(s):
-    return re.sub(b'\S*uuid\S*', b'', s.rstrip(b'\n'))
+    return re.sub(b'\S*uuid\S*', b'', s.rstrip(b'\n'))  # noqa
 
 
 class CSVImportTestCase(TestBase):
@@ -38,10 +40,10 @@ class CSVImportTestCase(TestBase):
         self.assertTrue('instanceID' in meta[0])
         self.assertEqual(meta[1], 0)
 
-        instance_id = '9118a3fc-ab99-44cf-9a97-1bb1482d8e2b'
+        instance_id = 'uuid:9118a3fc-ab99-44cf-9a97-1bb1482d8e2b'
         meta = get_submission_meta_dict(xform, instance_id)
         self.assertTrue('instanceID' in meta[0])
-        self.assertEqual(meta[0]['instanceID'], 'uuid:' + instance_id)
+        self.assertEqual(meta[0]['instanceID'], instance_id)
         self.assertEqual(meta[1], 0)
 
     def test_submit_csv_param_sanity_check(self):
@@ -286,6 +288,16 @@ class CSVImportTestCase(TestBase):
                          {'error': 'File not found!',
                           'job_status': 'FAILURE'})
 
+        # shouldn't fail if info is not of type dict
+        class MockAsyncResult2(object):
+            def __init__(self):
+                self.result = self.state = 'PROGRESS'
+                self.info = None
+
+        AsyncResult.return_value = MockAsyncResult2()
+        result = csv_import.get_async_csv_submission_status('x-y-z')
+        self.assertEqual(result, {'job_status': 'PROGRESS'})
+
     def test_submission_xls_to_csv(self):
         """Test that submission_xls_to_csv converts to csv"""
         c_csv_file = csv_import.submission_xls_to_csv(
@@ -297,3 +309,95 @@ class CSVImportTestCase(TestBase):
 
         self.assertEqual(
             g_csv_reader.fieldnames[10], c_csv_reader.fieldnames[10])
+
+    @mock.patch('onadata.libs.utils.csv_import.safe_create_instance')
+    def test_submit_csv_instance_id_consistency(self, safe_create_instance):
+        self._publish_xls_file(self.xls_file_path)
+        self.xform = XForm.objects.get()
+
+        safe_create_instance.return_value = {}
+        single_csv = open(os.path.join(self.fixtures_dir, 'single.csv'), 'rb')
+        csv_import.submit_csv(self.user.username, self.xform, single_csv)
+        xml_file_param = BytesIO(
+            open(os.path.join(self.fixtures_dir, 'single.xml'), 'rb').read())
+        safe_create_args = list(safe_create_instance.call_args[0])
+
+        instance_xml = fromstring(safe_create_args[1].getvalue())
+        single_instance_xml = fromstring(xml_file_param.getvalue())
+
+        instance_id = [
+            m.find('instanceID').text for m in instance_xml.findall('meta')][0]
+        single_instance_id = [m.find('instanceID').text for m in
+                              single_instance_xml.findall('meta')][0]
+
+        self.assertEqual(
+            len(instance_id), len(single_instance_id),
+            "Same uuid length in generated xml")
+
+    def test_data_upload(self):
+        """Data upload for submissions with no uuids"""
+        self._publish_xls_file(self.xls_file_path)
+        self.xform = XForm.objects.get()
+        count = Instance.objects.count()
+        single_csv = open(os.path.join(
+            self.fixtures_dir, 'single_data_upload.csv'), 'rb')
+        csv_import.submit_csv(self.user.username, self.xform, single_csv)
+        self.xform.refresh_from_db()
+        self.assertEqual(self.xform.num_of_submissions, count + 1)
+
+    def test_excel_date_conversion(self):
+        """Convert date from 01/01/1900 to 01-01-1900"""
+        date_md_form = """
+        | survey |
+        |        | type     | name  | label |
+        |        | today    | today | Today |
+        |        | text     | name  | Name  |
+        |        | date     | tdate | Date  |
+        |        | start    | start |       |
+        |        | end      | end   |       |
+        |        | dateTime | now   | Now   |
+        | choices |
+        |         | list name | name   | label  |
+        | settings |
+        |          | form_title | form_id |
+        |          | Dates      | dates   |
+        """
+
+        self._create_user_and_login()
+        data = {'name': 'data'}
+        survey = self.md_to_pyxform_survey(date_md_form, kwargs=data)
+        survey['sms_keyword'] = survey['id_string']
+        project = get_user_default_project(self.user)
+        xform = XForm(created_by=self.user, user=self.user,
+                      xml=survey.to_xml(), json=survey.to_json(),
+                      project=project)
+        xform.save()
+        date_csv = open(os.path.join(
+            self.fixtures_dir, 'date.csv'), 'rb')
+        date_csv.seek(0)
+
+        csv_reader = ucsv.DictReader(date_csv, encoding='utf-8-sig')
+        xl_dates = []
+        xl_datetime = []
+        # xl dates
+        for row in csv_reader:
+            xl_dates.append(row.get('tdate'))
+            xl_datetime.append(row.get('now'))
+
+        csv_import.submit_csv(self.user.username, xform, date_csv)
+        # converted dates
+        conv_dates = [instance.json.get('tdate')
+                      for instance in Instance.objects.filter(
+                xform=xform).order_by('date_created')]
+        conv_datetime = [instance.json.get('now')
+                         for instance in Instance.objects.filter(
+                xform=xform).order_by('date_created')]
+
+        self.assertEqual(xl_dates, ['3/1/2019', '2/26/2019'])
+        self.assertEqual(
+            xl_datetime,
+            [u'6/12/2020 13:20', u'2019-03-11T16:00:51.147+02:00'])
+        self.assertEqual(
+            conv_datetime,
+            [u'2020-06-12T13:20:00.000000', u'2019-03-11T16:00:51.147+02:00'])
+        self.assertEqual(conv_dates, ['2019-03-01', '2019-02-26'])

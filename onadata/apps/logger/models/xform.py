@@ -11,10 +11,10 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ObjectDoesNotExist
-from django.core.urlresolvers import reverse
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Sum
 from django.db.models.signals import post_delete, post_save, pre_save
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.encoding import python_2_unicode_compatible
 from django.utils.translation import ugettext as _
@@ -249,12 +249,12 @@ class XFormMixin(object):
         # hack
         # http://ronrothman.com/public/leftbraned/xml-dom-minidom-toprettyxml-\
         # and-silly-whitespace/
-        text_re = re.compile('(>)\n\s*(\s[^<>\s].*?)\n\s*(\s</)', re.DOTALL)
+        text_re = re.compile('(>)\n\s*(\s[^<>\s].*?)\n\s*(\s</)', re.DOTALL) # noqa
         output_re = re.compile('\n.*(<output.*>)\n(  )*')
         pretty_xml = text_re.sub(lambda m: ''.join(m.group(1, 2, 3)),
                                  self.xml.decode('utf-8'))
-        inline_output = output_re.sub('\g<1>', pretty_xml)
-        inline_output = re.compile('<label>\s*\n*\s*\n*\s*</label>').sub(
+        inline_output = output_re.sub('\g<1>', pretty_xml)  # noqa
+        inline_output = re.compile('<label>\s*\n*\s*\n*\s*</label>').sub( # noqa
             '<label></label>', inline_output)
         self.xml = inline_output
 
@@ -689,7 +689,8 @@ class XForm(XFormMixin, BaseModel):
     description = models.TextField(default=u'', null=True, blank=True)
     xml = models.TextField()
 
-    user = models.ForeignKey(User, related_name='xforms', null=True)
+    user = models.ForeignKey(
+        User, related_name='xforms', null=True, on_delete=models.CASCADE)
     require_auth = models.BooleanField(default=False)
     shared = models.BooleanField(default=False)
     shared_data = models.BooleanField(default=False)
@@ -730,8 +731,9 @@ class XForm(XFormMixin, BaseModel):
     num_of_submissions = models.IntegerField(default=0)
     version = models.CharField(
         max_length=XFORM_TITLE_LENGTH, null=True, blank=True)
-    project = models.ForeignKey('Project')
-    created_by = models.ForeignKey(User, null=True, blank=True)
+    project = models.ForeignKey('Project', on_delete=models.CASCADE)
+    created_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL)
     metadata_set = GenericRelation(
         'main.MetaData',
         content_type_field='content_type_id',
@@ -753,7 +755,6 @@ class XForm(XFormMixin, BaseModel):
         verbose_name_plural = ugettext_lazy("XForms")
         ordering = ("pk", )
         permissions = (
-            ("view_xform", _("Can view associated data")),
             ("view_xform_all", _("Can view all associated data")),
             ("view_xform_data", _("Can view submitted data")),
             ("report_xform", _("Can make submissions to the form")),
@@ -869,11 +870,22 @@ class XForm(XFormMixin, BaseModel):
         if 'skip_xls_read' in kwargs:
             del kwargs['skip_xls_read']
 
+        if (self.id_string and len(
+            self.id_string) > self.MAX_ID_LENGTH) or \
+            (self.sms_id_string and len(
+                self.sms_id_string) > self.MAX_ID_LENGTH):
+            raise XLSFormError(
+                    _(u'The XForm id_string provided exceeds %s characters.'
+                        ' Please change the "id_string" or "form_id" values'
+                        'in settings sheet or reduce the file name if you do'
+                        ' not have a settings sheets.' % self.MAX_ID_LENGTH))
+
         super(XForm, self).save(*args, **kwargs)
 
     def __str__(self):
         return getattr(self, "id_string", "")
 
+    @transaction.atomic()
     def soft_delete(self, user=None):
         """
         Return the soft deletion timestamp
@@ -908,7 +920,7 @@ class XForm(XFormMixin, BaseModel):
         if self.num_of_submissions == 0 or force_update:
             if self.is_merged_dataset:
                 count = self.mergedxform.xforms.aggregate(
-                    num=Sum('num_of_submissions')).get('num')
+                    num=Sum('num_of_submissions')).get('num') or 0
             else:
                 count = self.instances.filter(deleted_at__isnull=True).count()
 
@@ -1038,13 +1050,13 @@ post_delete.connect(
 class XFormUserObjectPermission(UserObjectPermissionBase):
     """Guardian model to create direct foreign keys."""
 
-    content_object = models.ForeignKey(XForm)
+    content_object = models.ForeignKey(XForm, on_delete=models.CASCADE)
 
 
 class XFormGroupObjectPermission(GroupObjectPermissionBase):
     """Guardian model to create direct foreign keys."""
 
-    content_object = models.ForeignKey(XForm)
+    content_object = models.ForeignKey(XForm, on_delete=models.CASCADE)
 
 
 def check_xform_uuid(new_uuid):

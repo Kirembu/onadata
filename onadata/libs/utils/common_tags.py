@@ -90,6 +90,28 @@ OWNER_TEAM_NAME = "Owners"
 
 API_TOKEN = 'api-token'
 KNOWN_MEDIA_TYPES = ['photo', 'image', 'audio', 'video']
+MEDIA_FILE_TYPES = {
+    "image": ["image/png", "image/jpeg", "image/jpg"],
+    "audio": ["audio/mp3", "audio/mp4"],
+    "video": ["video/mp4"],
+    "document": [
+        "application/pdf", "text/plain",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.\
+            document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        'application/json',
+        'application/msword',
+        'application/vnd.ms-excel',
+        'application/vnd.ms-powerpoint',
+        'application/vnd.oasis.opendocument.text',
+        'application/vnd.oasis.opendocument.spreadsheet',
+        'application/vnd.oasis.opendocument.presentation',
+        'application/vnd.openxmlformats-officedocument.presentationml.\
+        presentation',
+        'application/zip']
+
+}
+
 NUMERIC_LIST = ['integer', 'decimal', 'calculate']
 SELECT_ONE = 'select one'
 
@@ -133,3 +155,6 @@ SUBMISSION_REVIEW_INSTANCE_FIELD = '_review_status'
 EXCEL_TRUE = 1
 EXCEL_FALSE = 0
 MEMBERS = 'members'
+XLS_DATE_FIELDS = ['date', 'today']
+SUBMISSION_REVIEW = 'submission_review'
+XLS_DATETIME_FIELDS = ['start', 'end', 'dateTime', '_submission_time']
