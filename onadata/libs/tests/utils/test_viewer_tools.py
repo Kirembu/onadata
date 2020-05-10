@@ -63,7 +63,7 @@ class TestViewerTools(TestBase):
         kwargs = {xform_variable_name: xform_variable_value}
         defaults = generate_enketo_form_defaults(self.xform, **kwargs)
 
-        key = "defaults[/transportation/transport/{}]".format(
+        key = "defaults[/data/transport/{}]".format(
             xform_variable_name)
         self.assertEqual(defaults, {key: xform_variable_value})
 
@@ -87,9 +87,9 @@ class TestViewerTools(TestBase):
         defaults = generate_enketo_form_defaults(self.xform, **kwargs)
 
         transportation_types_key = \
-            "defaults[/transportation/transport/{}]".format(
+            "defaults[/data/transport/{}]".format(
                 transportation_types)
-        frequency_key = "defaults[/transportation/transport/"\
+        frequency_key = "defaults[/data/transport/"\
                         "loop_over_transport_types_frequency/"\
                         "{}/{}]".format(transportation_types_value, frequency)
         self.assertIn(transportation_types_key, defaults)
@@ -154,6 +154,11 @@ class TestViewerTools(TestBase):
         # with form pk url http://ona.io/bob/1
         url = get_form_url(request, username='bob', xform_pk=1)
         self.assertEqual(url, 'https://ona.io/bob/1')
+
+        # with form uuid url https://ona.io/enketo/492
+        url = get_form_url(
+                request, xform_pk=492, generate_consistent_urls=True)
+        self.assertEqual(url, 'https://ona.io/enketo/492')
 
     @override_settings(ZIP_REPORT_ATTACHMENT_LIMIT=8)
     @patch('onadata.libs.utils.viewer_tools.report_exception')

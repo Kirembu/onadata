@@ -10,6 +10,7 @@ from operator import itemgetter
 
 from django.conf import settings
 from django.db.models import Q
+from django.core.cache import cache
 from httmock import HTTMock, urlmatch
 from mock import MagicMock, patch
 import requests
@@ -17,7 +18,7 @@ import requests
 from onadata.apps.api import tools
 from onadata.apps.api.tests.viewsets.test_abstract_viewset import \
     TestAbstractViewSet
-from onadata.apps.api.tools import get_organization_owners_team
+from onadata.apps.api.tools import get_or_create_organization_owners_team
 from onadata.apps.api.viewsets.organization_profile_viewset import \
     OrganizationProfileViewSet
 from onadata.apps.api.viewsets.project_viewset import ProjectViewSet
@@ -26,6 +27,7 @@ from onadata.apps.logger.models import Project, XForm
 from onadata.apps.main.models import MetaData
 from onadata.libs import permissions as role
 from onadata.libs.models.share_project import ShareProject
+from onadata.libs.utils.cache_tools import PROJ_OWNER_CACHE, safe_key
 from onadata.libs.permissions import (ROLES_ORDERED, DataEntryMinorRole,
                                       DataEntryOnlyRole, DataEntryRole,
                                       EditorMinorRole, EditorRole, ManagerRole,
@@ -106,6 +108,50 @@ class TestProjectViewSet(TestAbstractViewSet):
         self.assertEqual(response.data, [serializer.data])
         self.assertIn('created_by', list(response.data[0]))
 
+    def test_project_list_returns_projects_for_active_users_only(self):
+        self._project_create()
+        alice_data = {'username': 'alice', 'email': 'alice@localhost.com'}
+        alice_profile = self._create_user_profile(alice_data)
+        alice_user = alice_profile.user
+        shared_project = Project(name='demo2',
+                                 shared=True,
+                                 metadata=json.dumps({'description': ''}),
+                                 created_by=alice_user,
+                                 organization=alice_user)
+        shared_project.save()
+
+        # share project with self.user
+        shareProject = ShareProject(
+            shared_project, self.user.username, 'manager')
+        shareProject.save()
+
+        # ensure when alice_user isn't active we can NOT
+        # see the project she shared
+        alice_user.is_active = False
+        alice_user.save()
+        request = self.factory.get('/', **self.extra)
+        request.user = self.user
+        response = self.view(request)
+        self.assertEqual(len(response.data), 1)
+        self.assertNotEqual(response.data[0].get(
+            'projectid'), shared_project.id)
+
+        # ensure when alice_user is active we can
+        # see the project she shared
+        alice_user.is_active = True
+        alice_user.save()
+        request = self.factory.get('/', **self.extra)
+        request.user = self.user
+        response = self.view(request)
+        self.assertEqual(len(response.data), 2)
+
+        shared_project_in_response = False
+        for project in response.data:
+            if project.get('projectid') == shared_project.id:
+                shared_project_in_response = True
+                break
+        self.assertTrue(shared_project_in_response)
+
     def test_projects_get(self):
         self._project_create()
         view = ProjectViewSet.as_view({
@@ -119,6 +165,13 @@ class TestProjectViewSet(TestAbstractViewSet):
 
         self.assertNotEqual(response.get('Cache-Control'), None)
         self.assertEqual(response.status_code, 200)
+
+        # test serialized data
+        serializer = ProjectSerializer(self.project,
+                                       context={'request': request})
+        self.assertEqual(response.data, serializer.data)
+
+        self.assertIsNotNone(self.project_data)
         self.assertEqual(response.data, self.project_data)
         res_user_props = list(response.data['users'][0])
         res_user_props.sort()
@@ -730,7 +783,7 @@ class TestProjectViewSet(TestAbstractViewSet):
         response = view(request, user=self.organization.user.username)
         self.assertEqual(response.status_code, 201)
 
-        owners_team = get_organization_owners_team(self.organization)
+        owners_team = get_or_create_organization_owners_team(self.organization)
         self.assertIn(alice_profile.user, owners_team.user_set.all())
 
         # let bob create a project in org
@@ -809,7 +862,7 @@ class TestProjectViewSet(TestAbstractViewSet):
         response = view(request, user=self.organization.user.username)
         self.assertEqual(response.status_code, 201)
 
-        owners_team = get_organization_owners_team(self.organization)
+        owners_team = get_or_create_organization_owners_team(self.organization)
         self.assertIn(alice_profile.user, owners_team.user_set.all())
 
         # let alice create a project in org
@@ -996,7 +1049,7 @@ class TestProjectViewSet(TestAbstractViewSet):
         alice_project_data = BaseProjectSerializer(
             self.project, context={'request': request}).data
         result = [{'owner': p.get('owner'),
-                  'projectid': p.get('projectid')} for p in response.data]
+                   'projectid': p.get('projectid')} for p in response.data]
         bob_data = {'owner': 'http://testserver/api/v1/users/bob',
                     'projectid': bobs_project_data.get('projectid')}
         alice_data = {'owner': 'http://testserver/api/v1/users/alice',
@@ -1562,7 +1615,7 @@ class TestProjectViewSet(TestAbstractViewSet):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data['username'], [u"Cannot share project"
-                                                     u" with the owner"])
+                                                     u" with the owner (bob)"])
         self.assertTrue(OwnerRole.user_has_role(self.user, self.project))
 
     def test_project_share_readonly(self):
@@ -1649,7 +1702,11 @@ class TestProjectViewSet(TestAbstractViewSet):
         response = view(request, pk=projectid)
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data, {'username': [u'User is not active']})
+        self.assertIsNone(
+            cache.get(safe_key(f'{PROJ_OWNER_CACHE}{self.project.pk}')))
+        self.assertEqual(
+            response.data,
+            {'username': [u'The following user(s) is/are not active: alice']})
 
         self.assertFalse(ReadOnlyRole.user_has_role(alice_profile.user,
                                                     self.project))
@@ -1676,6 +1733,8 @@ class TestProjectViewSet(TestAbstractViewSet):
         response = view(request, pk=projectid)
 
         self.assertEqual(response.status_code, 204)
+        self.assertIsNone(
+            cache.get(safe_key(f'{PROJ_OWNER_CACHE}{self.project.pk}')))
 
         self.assertTrue(ReadOnlyRole.user_has_role(alice_profile.user,
                                                    self.project))
@@ -2144,6 +2203,8 @@ class TestProjectViewSet(TestAbstractViewSet):
         response = view(request, pk=projectid)
 
         self.assertEqual(response.status_code, 204)
+        self.assertIsNone(
+            cache.get(safe_key(f'{PROJ_OWNER_CACHE}{self.project.pk}')))
 
         self.assertTrue(ReadOnlyRole.user_has_role(alice_profile.user,
                                                    self.project))
@@ -2212,3 +2273,87 @@ class TestProjectViewSet(TestAbstractViewSet):
         self.assertEqual(response.status_code, 200)
 
         self.assertFalse(serializer.data in response.data)
+
+    def test_project_share_multiple_users(self):
+        """
+        Test that the project can be shared to multiple users
+        """
+        self._publish_xls_form_to_project()
+        alice_data = {'username': 'alice', 'email': 'alice@localhost.com'}
+        alice_profile = self._create_user_profile(alice_data)
+
+        tom_data = {'username': 'tom', 'email': 'tom@localhost.com'}
+        tom_profile = self._create_user_profile(tom_data)
+        projectid = self.project.pk
+
+        self.assertFalse(
+            ReadOnlyRole.user_has_role(alice_profile.user, self.project))
+        self.assertFalse(
+            ReadOnlyRole.user_has_role(tom_profile.user, self.project))
+
+        data = {'username': 'alice,tom', 'role': ReadOnlyRole.name}
+        request = self.factory.post('/', data=data, **self.extra)
+
+        view = ProjectViewSet.as_view({
+            'post': 'share',
+            'get': 'retrieve'
+        })
+        response = view(request, pk=projectid)
+
+        self.assertEqual(response.status_code, 204)
+
+        request = self.factory.get('/', **self.extra)
+
+        response = view(request, pk=self.project.pk)
+
+        # get the users
+        users = response.data.get('users')
+
+        self.assertEqual(len(users), 3)
+
+        for user in users:
+            if user.get('user') == 'bob':
+                self.assertEquals(user.get('role'), 'owner')
+            else:
+                self.assertEquals(user.get('role'), 'readonly')
+
+    @patch('onadata.apps.api.viewsets.project_viewset.send_mail')
+    def test_sends_mail_on_multi_share(self, mock_send_mail):
+        """
+        Test that on sharing a projects to multiple users mail is sent to all
+        of them
+        """
+        # create project and publish form to project
+        self._publish_xls_form_to_project()
+        alice_data = {'username': 'alice', 'email': 'alice@localhost.com'}
+        alice_profile = self._create_user_profile(alice_data)
+        tom_data = {'username': 'tom', 'email': 'tom@localhost.com'}
+        tom_profile = self._create_user_profile(tom_data)
+        projectid = self.project.pk
+
+        self.assertFalse(
+            ReadOnlyRole.user_has_role(alice_profile.user, self.project))
+        self.assertFalse(
+            ReadOnlyRole.user_has_role(tom_profile.user, self.project))
+
+        data = {'username': 'alice,tom', 'role': ReadOnlyRole.name,
+                'email_msg': 'I have shared the project with you'}
+        request = self.factory.post('/', data=data, **self.extra)
+
+        view = ProjectViewSet.as_view({
+            'post': 'share'
+        })
+        response = view(request, pk=projectid)
+
+        self.assertEqual(response.status_code, 204)
+        self.assertTrue(mock_send_mail.called)
+        self.assertEqual(mock_send_mail.call_count, 2)
+
+        self.assertTrue(
+            ReadOnlyRole.user_has_role(alice_profile.user, self.project))
+        self.assertTrue(
+            ReadOnlyRole.user_has_role(alice_profile.user, self.xform))
+        self.assertTrue(
+            ReadOnlyRole.user_has_role(tom_profile.user, self.project))
+        self.assertTrue(
+            ReadOnlyRole.user_has_role(tom_profile.user, self.xform))

@@ -2,6 +2,7 @@ from distutils.util import strtobool
 
 from django.core.mail import send_mail
 from django.shortcuts import get_object_or_404
+from django.core.cache import cache
 
 from rest_framework import status
 from rest_framework.decorators import action
@@ -28,6 +29,8 @@ from onadata.libs.serializers.share_project_serializer import \
     (RemoveUserFromProjectSerializer, ShareProjectSerializer)
 from onadata.libs.serializers.user_profile_serializer import \
     UserProfileSerializer
+from onadata.libs.utils.cache_tools import (
+    PROJ_OWNER_CACHE, safe_delete)
 from onadata.libs.serializers.xform_serializer import (XFormCreateSerializer,
                                                        XFormSerializer)
 from onadata.libs.utils.common_tools import merge_dicts
@@ -67,9 +70,23 @@ class ProjectViewSet(AuthenticateHeaderMixin,
 
     def get_queryset(self):
         if self.request.method.upper() in ['GET', 'OPTIONS']:
-            self.queryset = Project.prefetched.filter(deleted_at__isnull=True)
+            self.queryset = Project.prefetched.filter(
+                deleted_at__isnull=True, organization__is_active=True)
 
         return super(ProjectViewSet, self).get_queryset()
+
+    def retrieve(self, request, *args, **kwargs):
+        """ Retrieve single project """
+        project_id = kwargs.get('pk')
+        project = cache.get(f'{PROJ_OWNER_CACHE}{project_id}')
+        if project:
+            return Response(project)
+        self.object = self.get_object()
+        serializer = ProjectSerializer(
+            self.object, context={'request': request})
+        cache.set(f'{PROJ_OWNER_CACHE}{self.object.pk}', serializer.data)
+
+        return Response(serializer.data)
 
     @action(methods=['POST', 'GET'], detail=True)
     def forms(self, request, **kwargs):
@@ -93,8 +110,12 @@ class ProjectViewSet(AuthenticateHeaderMixin,
                 published_by_formbuilder = request.data.get(
                     'published_by_formbuilder'
                 )
+
                 if str_to_bool(published_by_formbuilder):
                     MetaData.published_by_formbuilder(survey, 'True')
+
+                # clear project from cache
+                safe_delete(f'{PROJ_OWNER_CACHE}{survey.project.pk}')
 
                 return Response(serializer.data,
                                 status=status.HTTP_201_CREATED)
@@ -125,14 +146,24 @@ class ProjectViewSet(AuthenticateHeaderMixin,
             email_msg = data.get('email_msg')
             if email_msg:
                 # send out email message.
-                user = serializer.instance.user
-                send_mail(SHARE_PROJECT_SUBJECT.format(self.object.name),
-                          email_msg,
-                          DEFAULT_FROM_EMAIL,
-                          (user.email, ))
+                try:
+                    user = serializer.instance.user
+                except AttributeError:
+                    for instance in serializer.instance:
+                        user = instance.user
+                        send_mail(
+                            SHARE_PROJECT_SUBJECT.format(self.object.name),
+                            email_msg, DEFAULT_FROM_EMAIL, (user.email, ))
+                else:
+                    send_mail(SHARE_PROJECT_SUBJECT.format(self.object.name),
+                              email_msg, DEFAULT_FROM_EMAIL, (user.email,))
         else:
             return Response(data=serializer.errors,
                             status=status.HTTP_400_BAD_REQUEST)
+
+        # clear cache
+        safe_delete(f'{PROJ_OWNER_CACHE}{self.object.pk}')
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(methods=['DELETE', 'GET', 'POST'], detail=True)

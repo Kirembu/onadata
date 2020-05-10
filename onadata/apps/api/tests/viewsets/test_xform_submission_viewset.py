@@ -19,7 +19,7 @@ from onadata.apps.api.tests.viewsets.test_abstract_viewset import \
     TestAbstractViewSet
 from onadata.apps.api.viewsets.xform_submission_viewset import \
     XFormSubmissionViewSet
-from onadata.apps.logger.models import Attachment, Instance
+from onadata.apps.logger.models import Attachment, Instance, XForm
 from onadata.libs.permissions import DataEntryRole
 
 
@@ -80,6 +80,46 @@ class TestXFormSubmissionViewSet(TestAbstractViewSet, TransactionTestCase):
                 self.assertEqual(response['Location'],
                                  'http://testserver/%s/submission'
                                  % self.user.username)
+
+    def test_username_case_insensitive(self):
+        """
+        Test that the form owners username is matched without regards
+        to the username case
+        """
+        # Change username to Bob
+        self.user.username = 'Bob'
+        self.user.save()
+
+        survey = self.surveys[0]
+        media_file = "1335783522563.jpg"
+        path = os.path.join(self.main_directory, 'fixtures',
+                            'transportation', 'instances', survey, media_file)
+        form = XForm.objects.get(user=self.user)
+        count = form.submission_count()
+        with open(path, 'rb') as f:
+            f = InMemoryUploadedFile(f, 'media_file', media_file, 'image/jpg',
+                                     os.path.getsize(path), None)
+            submission_path = os.path.join(
+                self.main_directory, 'fixtures',
+                'transportation', 'instances', survey, survey + '.xml')
+            with open(submission_path, 'rb') as sf:
+                data = {'xml_submission_file': sf, 'media_file': f}
+                # Make submission to /bob/submission
+                request = self.factory.post(
+                    '/%s/submission' % 'bob', data)
+                request.user = AnonymousUser()
+                response = self.view(request, username=self.user.username)
+
+                # Submission should be submitted to the right form
+                self.assertContains(response, 'Successful submission',
+                                    status_code=201)
+                self.assertTrue(response.has_header('X-OpenRosa-Version'))
+                self.assertTrue(
+                    response.has_header('X-OpenRosa-Accept-Content-Length'))
+                self.assertTrue(response.has_header('Date'))
+                self.assertEqual(response['Content-Type'],
+                                 'text/xml; charset=utf-8')
+                self.assertEqual(count+1, form.submission_count())
 
     def test_post_submission_authenticated(self):
         """
@@ -431,6 +471,43 @@ class TestXFormSubmissionViewSet(TestAbstractViewSet, TransactionTestCase):
         Test a Rapidpro Webhook POST submission.
         """
         # pylint: disable=C0301
+        data = json.dumps({
+            'contact': {
+                'name': 'Davis',
+                'urn': 'tel:+12065551212',
+                'uuid': '23dae14f-7202-4ff5-bdb6-2390d2769968'
+            },
+            'flow': {
+                'name': '1166',
+                'uuid': '9da5e439-35af-4ecb-b7fc-2911659f6b04'
+            },
+            'results': {
+                'fruit_name': {
+                    'category': 'All Responses',
+                    'value': 'orange'
+                },
+            }
+        })
+
+        request = self.factory.post(
+            '/submission', data,
+            content_type='application/json',
+            HTTP_USER_AGENT='RapidProMailroom/5.2.0')
+        response = self.view(request)
+        self.assertEqual(response.status_code, 401)
+        auth = DigestAuth('bob', 'bobbob')
+        request.META.update(auth(request.META, response))
+        response = self.view(request, username=self.user.username,
+                             xform_pk=self.xform.pk)
+        self.assertContains(response, 'Successful submission', status_code=201)
+        self.assertTrue(response.has_header('Date'))
+        self.assertEqual(response['Location'], 'http://testserver/submission')
+
+    def test_legacy_rapidpro_post_submission(self):
+        """
+        Test a Legacy Rapidpro Webhook POST submission.
+        """
+        # pylint: disable=C0301
         data = 'run=76250&text=orange&flow_uuid=9da5e439-35af-4ecb-b7fc-2911659f6b04&phone=%2B12065550100&step=3b15df81-a0bd-4de7-8186-145ea3bb6c43&contact_name=Antonate+Maritim&flow_name=fruit&header=Authorization&urn=tel%3A%2B12065550100&flow=1166&relayer=-1&contact=fe4df540-39c1-4647-b4bc-1c93833e22e0&values=%5B%7B%22category%22%3A+%7B%22base%22%3A+%22All+Responses%22%7D%2C+%22node%22%3A+%228037c12f-a277-4255-b630-6a03b035767a%22%2C+%22time%22%3A+%222017-10-04T07%3A18%3A08.171069Z%22%2C+%22text%22%3A+%22orange%22%2C+%22rule_value%22%3A+%22orange%22%2C+%22value%22%3A+%22orange%22%2C+%22label%22%3A+%22fruit_name%22%7D%5D&time=2017-10-04T07%3A18%3A08.205524Z&steps=%5B%7B%22node%22%3A+%220e18202f-9ec4-4756-b15b-e9f152122250%22%2C+%22arrived_on%22%3A+%222017-10-04T07%3A15%3A17.548657Z%22%2C+%22left_on%22%3A+%222017-10-04T07%3A15%3A17.604668Z%22%2C+%22text%22%3A+%22Fruit%3F%22%2C+%22type%22%3A+%22A%22%2C+%22value%22%3A+null%7D%2C+%7B%22node%22%3A+%228037c12f-a277-4255-b630-6a03b035767a%22%2C+%22arrived_on%22%3A+%222017-10-04T07%3A15%3A17.604668Z%22%2C+%22left_on%22%3A+%222017-10-04T07%3A18%3A08.171069Z%22%2C+%22text%22%3A+%22orange%22%2C+%22type%22%3A+%22R%22%2C+%22value%22%3A+%22orange%22%7D%2C+%7B%22node%22%3A+%223b15df81-a0bd-4de7-8186-145ea3bb6c43%22%2C+%22arrived_on%22%3A+%222017-10-04T07%3A18%3A08.171069Z%22%2C+%22left_on%22%3A+null%2C+%22text%22%3A+null%2C+%22type%22%3A+%22A%22%2C+%22value%22%3A+null%7D%5D&flow_base_language=base&channel=-1'  # noqa
         request = self.factory.post(
             '/submission', data,
@@ -626,3 +703,82 @@ class TestXFormSubmissionViewSet(TestAbstractViewSet, TransactionTestCase):
                 self.assertContains(response, 'Unable to read submitted file',
                                     status_code=400)
                 self.assertTrue(response.has_header('X-OpenRosa-Version'))
+
+    def test_post_submission_using_pk_while_anonymous(self):
+        """
+        Test that one is able to submit data using the enketo submission
+        endpoint built for a particular form through it's primary key
+        while anonymous
+        """
+        s = self.surveys[0]
+        media_file = "1335783522563.jpg"
+        path = os.path.join(self.main_directory, 'fixtures',
+                            'transportation', 'instances', s, media_file)
+        with open(path, 'rb') as f:
+            f = InMemoryUploadedFile(f, 'media_file', media_file, 'image/jpg',
+                                     os.path.getsize(path), None)
+            submission_path = os.path.join(
+                self.main_directory, 'fixtures',
+                'transportation', 'instances', s, s + '.xml')
+            with open(submission_path, 'rb') as sf:
+                data = {'xml_submission_file': sf, 'media_file': f}
+                request = self.factory.post(
+                    f'/enketo/{self.xform.pk}/submission', data)
+                count = Instance.objects.filter(xform=self.xform).count()
+                request.user = AnonymousUser()
+                response = self.view(request, form_pk=self.xform.pk)
+                self.assertContains(response, 'Successful submission',
+                                    status_code=201)
+                self.assertTrue(response.has_header('X-OpenRosa-Version'))
+                self.assertTrue(
+                    response.has_header('X-OpenRosa-Accept-Content-Length'))
+                self.assertTrue(response.has_header('Date'))
+                self.assertEqual(response['Content-Type'],
+                                 'text/xml; charset=utf-8')
+                self.assertEqual(
+                    response['Location'],
+                    f'http://testserver/enketo/{self.xform.pk}/submission')
+                self.assertEqual(
+                    Instance.objects.filter(xform=self.xform).count(),
+                    count+1)
+
+    def test_post_submission_using_pk_while_authenticated(self):
+        """
+        Test that one is able to submit data using the enketo
+        submission endpoint built for a particular form through
+        it's primary key while authenticated
+        """
+        s = self.surveys[0]
+        media_file = "1335783522563.jpg"
+        path = os.path.join(self.main_directory, 'fixtures',
+                            'transportation', 'instances', s, media_file)
+        with open(path, 'rb') as f:
+            f = InMemoryUploadedFile(f, 'media_file', media_file, 'image/jpg',
+                                     os.path.getsize(path), None)
+            submission_path = os.path.join(
+                self.main_directory, 'fixtures',
+                'transportation', 'instances', s, s + '.xml')
+            with open(submission_path, 'rb') as sf:
+                data = {'xml_submission_file': sf, 'media_file': f}
+                count = Instance.objects.filter(xform=self.xform).count()
+                request = self.factory.post(
+                    f'/enketo/{self.xform.pk}/submission', data)
+                response = self.view(request)
+                self.assertEqual(response.status_code, 401)
+                auth = DigestAuth('bob', 'bobbob')
+                request.META.update(auth(request.META, response))
+                response = self.view(request, form_pk=self.xform.pk)
+                self.assertContains(response, 'Successful submission',
+                                    status_code=201)
+                self.assertTrue(response.has_header('X-OpenRosa-Version'))
+                self.assertTrue(
+                    response.has_header('X-OpenRosa-Accept-Content-Length'))
+                self.assertTrue(response.has_header('Date'))
+                self.assertEqual(response['Content-Type'],
+                                 'text/xml; charset=utf-8')
+                self.assertEqual(
+                    response['Location'],
+                    f'http://testserver/enketo/{self.xform.pk}/submission')
+                self.assertEqual(
+                    Instance.objects.filter(xform=self.xform).count(),
+                    count + 1)

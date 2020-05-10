@@ -32,6 +32,7 @@ from httmock import HTTMock
 from mock import Mock, patch
 from rest_framework import status
 from rest_framework.viewsets import ModelViewSet
+from http.client import BadStatusLine
 
 from onadata.apps.api.tests.mocked_data import (
     enketo_error500_mock, enketo_error502_mock, enketo_error_mock, enketo_mock,
@@ -70,6 +71,13 @@ def fixtures_path(filepath):
     return open(os.path.join(
         settings.PROJECT_ROOT, 'libs', 'tests', 'utils', 'fixtures', filepath),
         'rb')
+
+
+def raise_bad_status_line(arg):
+    """
+    Raises http.client BadStatusLine
+    """
+    raise BadStatusLine('RANDOM STATUS')
 
 
 ROLES = [ReadOnlyRole,
@@ -446,8 +454,15 @@ class TestXFormViewSet(TestAbstractViewSet):
                 response_data[indx].pop('last_updated_at')
                 expected_data[indx].pop('last_updated_at')
 
+            response_users = sorted(
+                response_data[0].pop('users'), key=lambda x: x['user'])
+            expected_users = sorted(
+                expected_data[0].pop('users'), key=lambda x: x['user'])
             self.assertEqual(response_data[0], expected_data[0])
+            self.assertEqual(response_users, expected_users)
+
             self.assertEqual(response_data[1], expected_data[1])
+            self.assertEqual(response_users, expected_users)
 
             # apply filter, see only bob's forms
             request = self.factory.get(
@@ -557,7 +572,7 @@ class TestXFormViewSet(TestAbstractViewSet):
             })
             formid = self.xform.pk
             data = {
-                "name": "transportation",
+                "name": "data",
                 "title": "transportation_2011_07_25",
                 "default_language": "default",
                 "id_string": "transportation_2011_07_25",
@@ -619,7 +634,7 @@ class TestXFormViewSet(TestAbstractViewSet):
             uuid_nodes = [
                 node for node in model_node.childNodes
                 if node.nodeType == Node.ELEMENT_NODE and
-                node.getAttribute("nodeset") == "/transportation/formhub/uuid"]
+                node.getAttribute("nodeset") == "/data/formhub/uuid"]
             self.assertEqual(len(uuid_nodes), 1)
             uuid_node = uuid_nodes[0]
             uuid_node.setAttribute("calculate", "''")
@@ -1366,8 +1381,12 @@ class TestXFormViewSet(TestAbstractViewSet):
             response = view(request)
             self.assertEqual(response.status_code, 400)
             self.assertEqual(response.get('Cache-Control'), None)
-            error_msg = 'In strict mode, the XForm ID must be a valid slug'\
-                ' and contain no spaces.'
+            error_msg = ('In strict mode, the XForm ID must be '
+                         'a valid slug and contain no spaces.'
+                         ' Please ensure that you have set an'
+                         ' id_string in the settings sheet or '
+                         'have modified the filename to not '
+                         'contain any spaces.')
             self.assertEqual(response.data.get('text'), error_msg)
 
         path = os.path.join(
@@ -1444,11 +1463,44 @@ class TestXFormViewSet(TestAbstractViewSet):
             self.assertEqual(response.data['public'], True)
             self.assertEqual(response.data['description'], description)
             self.assertEqual(response.data['title'], title)
+            self.assertEqual(response.data['public_key'], '')
             matches = re.findall(r"<h:title>([^<]+)</h:title>", self.xform.xml)
             self.assertTrue(len(matches) > 0)
             self.assertEqual(matches[0], title)
             self.assertFalse(self.xform.hash == "" or self.xform.hash is None)
             self.assertFalse(self.xform.hash == xform_old_hash)
+
+            # Test can update public_key
+            public_key = """
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxNlbF920Dj7CYsKYrxcK
+PL0PatubLO2OhcMCpHgdbpGZscbWVAcXNkdjhmPhTuVPXmOa2Wjwe4ZkRfXJW2Iv
+lvPm//UIWXhXUsNQaB9P
+X4yxLWC0fZQ9T3ito8PcZ1nS+B39HYMkRSn9K5r65zRi
+SZhwvTkhcwq7Cea+wX3UT/pfEx62Z8GZ3E8iiYrIcNv2DM+x+0yYmQEboXq1tlKE
+twkF965z9mUTyXYfinrrHVx7xXhz1jbiWyOvTpiY8aAC35EaV3h/MdNXKk7WznJi
+xdM
+nhMo+jI88L3qfm4/rtWKuQ9/a268phlNj34uQeoDDHuRViQo00L5meE/pFptm
+7QIDAQAB
+-----END PUBLIC KEY-----"""
+
+            clean_public_key = """
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxNlbF920Dj7CYsKYrxcK
+PL0PatubLO2OhcMCpHgdbpGZscbWVAcXNkdjhmPhTuVPXmOa2Wjwe4ZkRfXJW2Iv
+lvPm//UIWXhXUsNQaB9P
+X4yxLWC0fZQ9T3ito8PcZ1nS+B39HYMkRSn9K5r65zRi
+SZhwvTkhcwq7Cea+wX3UT/pfEx62Z8GZ3E8iiYrIcNv2DM+x+0yYmQEboXq1tlKE
+twkF965z9mUTyXYfinrrHVx7xXhz1jbiWyOvTpiY8aAC35EaV3h/MdNXKk7WznJi
+xdM
+nhMo+jI88L3qfm4/rtWKuQ9/a268phlNj34uQeoDDHuRViQo00L5meE/pFptm
+7QIDAQAB"""
+
+            data = {'public_key': public_key}
+            request = self.factory.patch('/', data=data, **self.extra)
+            response = view(request, pk=self.xform.id)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.data['public_key'], clean_public_key)
+            self.assertTrue(response.data['encrypted'])
 
     def test_partial_update_anon(self):
         with HTTMock(enketo_mock):
@@ -1796,6 +1848,7 @@ class TestXFormViewSet(TestAbstractViewSet):
             'owner': None,
             'public': False,
             'public_data': False,
+            'public_key': u'',
             'require_auth': False,
             'description': u'',
             'downloadable': False,
@@ -1938,6 +1991,24 @@ class TestXFormViewSet(TestAbstractViewSet):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get('Cache-Control'), None)
             self.assertEqual(response.data.get('additions'), 9)
+            self.assertEqual(response.data.get('updates'), 0)
+
+    @override_settings(CSV_FILESIZE_IMPORT_ASYNC_THRESHOLD=4*100000)
+    def test_large_csv_import(self):
+        with HTTMock(enketo_mock):
+            xls_path = os.path.join(settings.PROJECT_ROOT, "apps", "main",
+                                    "tests", "fixtures", "tutorial.xls")
+            self._publish_xls_form_to_project(xlsform_path=xls_path)
+            view = XFormViewSet.as_view(
+                {'post': 'csv_import', 'get': 'csv_import'})
+            csv_import = fixtures_path('large_csv_upload.csv')
+            post_data = {'csv_file': csv_import}
+            request = self.factory.post('/', data=post_data, **self.extra)
+            response = view(request, pk=self.xform.id)
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get('Cache-Control'), None)
+            self.assertEqual(response.data.get('additions'), 800)
             self.assertEqual(response.data.get('updates'), 0)
 
     @override_settings(CELERY_TASK_ALWAYS_EAGER=True)
@@ -2129,7 +2200,7 @@ class TestXFormViewSet(TestAbstractViewSet):
         fhuuid = xml.find('formhub/uuid')
         self.assertEqual(
             xml[xml[:fhuuid].rfind('=') + 2:fhuuid],
-            '/transportation/'
+            '/data/'
         )
 
         view = XFormViewSet.as_view({
@@ -2166,7 +2237,7 @@ class TestXFormViewSet(TestAbstractViewSet):
         fhuuid = xml.find('formhub/uuid')
         self.assertEqual(
             xml[xml[:fhuuid].rfind('=') + 2:fhuuid],
-            '/transportation/'
+            '/data/'
         )
 
     def test_update_xform_with_different_id_string_form_with_sub(self):
@@ -2275,7 +2346,7 @@ class TestXFormViewSet(TestAbstractViewSet):
                 response = view(request, pk=form_id)
                 self.assertEqual(response.status_code, 200)
                 xform = XForm.objects.get(pk=form_id)
-                self.assertEqual('transportation',
+                self.assertEqual('data',
                                  xform.survey.xml_instance().tagName)
 
     def test_id_strings_should_be_unique_in_each_account(self):
@@ -2797,6 +2868,7 @@ class TestXFormViewSet(TestAbstractViewSet):
 
             self.assertIsNotNone(xform.deleted_at)
             self.assertTrue('deleted-at' in xform.id_string)
+            self.assertEqual(xform.deleted_by, self.user)
 
             view = XFormViewSet.as_view({
                 'get': 'retrieve'
@@ -4522,3 +4594,27 @@ class TestXFormViewSet(TestAbstractViewSet):
             self.assertEqual(response.status_code, 400)
             self.assertEqual(
                 response.data.get('error'), 'csv_file not a csv file')
+
+    @patch(
+        'onadata.apps.main.forms.urlopen', side_effect=raise_bad_status_line)
+    def test_error_raised_xform_url_upload_urllib_error(self, mock_urlopen):
+        """
+        Test that the BadStatusLine error thrown by urlopen when a status
+        code is not understood is handled properly
+        """
+        view = XFormViewSet.as_view({
+            'post': 'create'
+        })
+
+        xls_url = 'http://localhost:2000'
+
+        post_data = {'xls_url': xls_url}
+        request = self.factory.post('/', data=post_data, **self.extra)
+        response = view(request)
+        error_msg = ('An error occurred while publishing the form. '
+                     'Please try again.')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.data.get('text'),
+            error_msg)

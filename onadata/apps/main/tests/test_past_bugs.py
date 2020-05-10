@@ -13,13 +13,20 @@ class TestInputs(TestBase):
     """
 
     def test_uniqueness_of_group_names_enforced(self):
+        """
+        Test an error is raised when a form containing a group
+        with the name "data" is present within the form.
+
+        This error is raised due to the fact that the root node
+        is named "data"
+        """
         pre_count = XForm.objects.count()
         self._create_user_and_login()
         self.assertRaisesMessage(
             PyXFormError,
-            "There are two sections with the name group_names_must_be_unique.",
+            "There are two sections with the name data.",
             self._publish_xls_file,
-            'fixtures/group_names_must_be_unique.xls')
+            'fixtures/group_names_must_be_unique.xlsx')
         self.assertEqual(XForm.objects.count(), pre_count)
 
     def test_mch(self):
@@ -56,7 +63,7 @@ class TestCascading(TestBase):
 
     def test_correct_id_string_picked(self):
         XForm.objects.all().delete()
-        name = 'new_cascading_select.xls'
+        name = 'new_cascading_select.xlsx'
         id_string = u'cascading_select_test'
         self._publish_xls_file(os.path.join(
             self.this_directory, 'fixtures', 'bug_fixes', name))

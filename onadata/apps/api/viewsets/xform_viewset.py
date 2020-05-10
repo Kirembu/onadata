@@ -76,6 +76,7 @@ from onadata.libs.utils.viewer_tools import (enketo_url,
                                              get_enketo_single_submit_url)
 from onadata.libs.exceptions import EnketoError
 from onadata.settings.common import XLS_EXTENSIONS, CSV_EXTENSION
+from onadata.libs.utils.cache_tools import PROJ_OWNER_CACHE, safe_delete
 
 ENKETO_AUTH_COOKIE = getattr(settings, 'ENKETO_AUTH_COOKIE',
                              '__enketo')
@@ -337,17 +338,21 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
                                 status=status.HTTP_400_BAD_REQUEST)
 
             fname = request.FILES.get('xls_file').name
+            if isinstance(request.FILES.get('xls_file'), InMemoryUploadedFile):
+                xls_file_path = default_storage.save(
+                        f'tmp/async-upload-{owner.username}-{fname}',
+                        ContentFile(request.FILES.get('xls_file').read()))
+            else:
+                xls_file_path = request.FILES.get(
+                    'xls_file').temporary_file_path()
+
             resp.update(
                 {u'job_uuid':
                  tasks.publish_xlsform_async.delay(
-                     request.user, request.POST, owner,
-                     ({'name': fname,
-                       'data': request.FILES.get('xls_file').read()}
-                      if isinstance(request.FILES.get('xls_file'),
-                                    InMemoryUploadedFile) else
-                      {'name': fname,
-                       'path': request.FILES.get(
-                           'xls_file').temporary_file_path()})).task_id})
+                     request.user.id,
+                     request.POST,
+                     owner.id,
+                     {'name': fname, 'path': xls_file_path}).task_id})
             resp_code = status.HTTP_202_ACCEPTED
 
         return Response(data=resp, status=resp_code, headers=headers)
@@ -393,8 +398,9 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
             request.GET.get('survey_type')
         self.object = self.get_object()
         form_url = get_form_url(
-            request, self.object.user.username, settings.ENKETO_PROTOCOL,
-            xform_pk=self.object.pk)
+            request, self.object.user.username,
+            protocol=settings.ENKETO_PROTOCOL,
+            xform_pk=self.object.pk, generate_consistent_urls=True)
 
         data = {'message': _(u"Enketo not properly configured.")}
         http_status = status.HTTP_400_BAD_REQUEST
@@ -710,8 +716,13 @@ class XFormViewSet(AnonymousUserPublicFormsMixin,
         if request.method == 'DELETE':
             xform = self.get_object()
             resp = {
-                u'job_uuid': tasks.delete_xform_async.delay(xform.pk).task_id,
+                u'job_uuid': tasks.delete_xform_async.delay(
+                    xform.pk,
+                    request.user.id).task_id,
                 u'time_async_triggered': datetime.now()}
+
+            # clear project from cache
+            safe_delete(f'{PROJ_OWNER_CACHE}{xform.project.pk}')
             resp_code = status.HTTP_202_ACCEPTED
 
         elif request.method == 'GET':

@@ -93,9 +93,32 @@ class TestFormErrors(TestBase):
         self.xform.save()
         xls_path = os.path.join(self.this_directory, "fixtures",
                                 "transportation", "tutorial .xls")
-        msg = u"The name 'tutorial ' is an invalid xml tag. Names must begin"\
-            u" with a letter, colon, or underscore, subsequent characters "\
-            u"can include numbers, dashes, and periods"
+        msg = ("In strict mode, the XForm ID must be a valid slug"
+               " and contain no spaces. Please ensure that you "
+               "have set an id_string in the settings sheet or"
+               " have modified the filename to not contain any spaces.")
+        self.assertRaisesMessage(
+            XLSFormError, msg, self._publish_xls_file, xls_path)
+        self.assertEquals(XForm.objects.count(), count)
+
+    def test_choice_duplicate_error(self):
+        """
+        Test that the choice duplicate error is raised if
+        the "allow_choice_duplicates" setting is not set in the
+        forms settings sheet
+        """
+        count = XForm.objects.count()
+        xls_path = os.path.join(
+            self.this_directory, 'fixtures', 'cascading_selects',
+            'duplicate_choice_form.xls')
+        msg = ("The name column for the 'counties' choice list"
+               " contains these duplicates: 'king'. Duplicate "
+               "names will be impossible to identify in "
+               "analysis unless a previous value in a "
+               "cascading select differentiates them. If this "
+               "is intentional, you can set the "
+               "allow_choice_duplicates setting to 'yes'. "
+               "Read more: https://xlsform.org/#choice-names.")
         self.assertRaisesMessage(
             PyXFormError, msg, self._publish_xls_file, xls_path)
         self.assertEquals(XForm.objects.count(), count)

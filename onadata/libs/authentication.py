@@ -6,7 +6,7 @@ from __future__ import unicode_literals
 from datetime import datetime
 
 from django.conf import settings
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, update_last_login
 from django.core.signing import BadSignature
 from django.db import DataError
 from django.shortcuts import get_object_or_404
@@ -43,6 +43,22 @@ TEMP_TOKEN_EXPIRY_TIME = getattr(
     settings, "DEFAULT_TEMP_TOKEN_EXPIRY_TIME", 60 * 60 * 6
 )
 
+LOCKOUT_EXCLUDED_PATHS = getattr(
+    settings,
+    "LOCKOUT_EXCLUDED_PATHS",
+    [
+        "formList",
+        "submission",
+        "xformsManifest",
+        "xformsMedia",
+        "form.xml",
+        "submissionList",
+        "downloadSubmission",
+        "upload",
+        "formUpload",
+    ],
+)
+
 
 def expired(time_token_created):
     """Checks if the time between when time_token_created and current time
@@ -57,13 +73,13 @@ def expired(time_token_created):
     return True if time_diff > token_expiry_time else False
 
 
-def get_api_token(json_web_token):
+def get_api_token(cookie_jwt):
     """Get API Token from JSON Web Token"""
     # having this here allows the values to be mocked easily as oppossed to
     # being on the global scope
     try:
         jwt_payload = jwt.decode(
-            json_web_token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM]
+            cookie_jwt, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM]
         )
         api_token = get_object_or_404(Token, key=jwt_payload.get(API_TOKEN))
 
@@ -90,6 +106,7 @@ class DigestAuthentication(BaseAuthentication):
         try:
             check_lockout(request)
             if self.authenticator.authenticate(request):
+                update_last_login(None, request.user)
                 return request.user, None
             else:
                 attempts = login_attempts(request)
@@ -220,19 +237,54 @@ class TempTokenURLParameterAuthentication(TempTokenAuthentication):
         return self.authenticate_credentials(key)
 
 
+class SSOHeaderAuthentication(BaseAuthentication):
+    """TempToken URL via temp_token request parameter.
+    """
+
+    def authenticate(self, request):  # pylint: disable=no-self-use
+        sso = request.META.get('HTTP_SSO') or request.COOKIES.get('SSO')
+
+        if not sso:
+            return None
+
+        jwt_payload = jwt.decode(
+            sso, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM]
+        )
+        email = jwt_payload.get('email')
+
+        user = User.objects.filter(email=email).first()
+        if user:
+            return (user, True)
+
+        return None
+
+
 def check_lockout(request):
+    """Check request user is not locked out on authentication.
+
+    Returns the username if not locked out, None if request path is in
+    LOCKOUT_EXCLUDED_PATHS.
+    Raises AuthenticationFailed on lockout.
+    """
+    uri_path = request.get_full_path()
+    if any(part in LOCKOUT_EXCLUDED_PATHS for part in uri_path.split("/")):
+        return None
+
     try:
         if isinstance(request.META["HTTP_AUTHORIZATION"], bytes):
             username = (
                 request.META["HTTP_AUTHORIZATION"]
                 .decode("utf-8")
-                .split('"')[1]
+                .split('"')[1].strip()
             )
         else:
-            username = request.META["HTTP_AUTHORIZATION"].split('"')[1]
+            username = request.META["HTTP_AUTHORIZATION"].split('"')[1].strip()
     except (TypeError, AttributeError, IndexError):
-        return
+        pass
     else:
+        if not username:
+            raise AuthenticationFailed(_("Invalid username"))
+
         lockout = cache.get(safe_key("{}{}".format(LOCKOUT_USER, username)))
         if lockout:
             time_locked_out = datetime.now() - datetime.strptime(
@@ -253,6 +305,8 @@ def check_lockout(request):
             )
         return username
 
+    return None
+
 
 def login_attempts(request):
     """Track number of login attempts made by user within a specified amount
@@ -265,12 +319,15 @@ def login_attempts(request):
         cache.incr(attempts_key)
         attempts = cache.get(attempts_key)
         if attempts >= getattr(settings, "MAX_LOGIN_ATTEMPTS", 10):
-            send_lockout_email(username)
-            cache.set(
-                safe_key("{}{}".format(LOCKOUT_USER, username)),
-                datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                getattr(settings, "LOCKOUT_TIME", 1800),
-            )
+            lockout_key = safe_key("{}{}".format(LOCKOUT_USER, username))
+            lockout = cache.get(lockout_key)
+            if not lockout:
+                send_lockout_email(username)
+                cache.set(
+                    lockout_key,
+                    datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                    getattr(settings, "LOCKOUT_TIME", 1800),
+                )
             check_lockout(request)
             return attempts
         return attempts

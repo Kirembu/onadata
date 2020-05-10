@@ -15,6 +15,7 @@ from rest_framework import authentication
 from rest_framework.authtoken.models import Token
 
 from onadata.apps.api.models.temp_token import TempToken
+from onadata.apps.api.models.odk_token import ODKToken
 from onadata.apps.api.tests.viewsets.test_abstract_viewset import \
     TestAbstractViewSet
 from onadata.apps.api.viewsets.connect_viewset import ConnectViewSet
@@ -33,7 +34,7 @@ class TestConnectViewSet(TestAbstractViewSet):
         self.view = ConnectViewSet.as_view({
             "get": "list",
             "post": "reset",
-            "delete": "expire"
+            "delete": "expire",
         })
         self.data = {
             'url': 'http://testserver/api/v1/profiles/bob',
@@ -50,6 +51,15 @@ class TestConnectViewSet(TestAbstractViewSet):
             'user': 'http://testserver/api/v1/users/bob',
             'api_token': self.user.auth_token.key,
         }
+
+    def test_generate_auth_token(self):
+        self.view = ConnectViewSet.as_view({
+            "post": "create",
+            })
+        request = self.factory.post("/", **self.extra)
+        request.session = self.client.session
+        response = self.view(request)
+        self.assertEqual(response.status_code, 201)
 
     def test_regenerate_auth_token(self):
         self.view = ConnectViewSet.as_view({
@@ -285,12 +295,13 @@ class TestConnectViewSet(TestAbstractViewSet):
         self.assertEqual(response.status_code, 400)
 
         data['uid'] = urlsafe_base64_encode(
-            force_bytes(self.user.pk)).decode('utf-8')
+            force_bytes(self.user.pk))
         # with uid, should be successful
         request = self.factory.post('/', data=data)
         response = self.view(request)
-        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.status_code, 200)
         user = User.objects.get(email=self.user.email)
+        self.assertEqual(user.username, response.data['username'])
         self.assertTrue(user.check_password(new_password))
 
         request = self.factory.post('/', data=data)
@@ -304,7 +315,7 @@ class TestConnectViewSet(TestAbstractViewSet):
         self.user.save()
         new_password = "bobbob1"
         uid = urlsafe_base64_encode(
-            force_bytes(self.user.pk)).decode('utf-8')
+            force_bytes(self.user.pk))
         mhv = default_token_generator
         token = mhv.make_token(self.user)
         data = {'token': token, 'new_password': new_password,
@@ -471,3 +482,114 @@ class TestConnectViewSet(TestAbstractViewSet):
         # clear cache
         cache.delete(safe_key("login_attempts-bob"))
         cache.delete(safe_key("lockout_user-bob"))
+
+    def test_generate_odk_token(self):
+        """
+        Test that ODK Tokens can be created
+        """
+        view = ConnectViewSet.as_view({'post': 'odk_token'})
+        request = self.factory.post('/', **self.extra)
+        request.session = self.client.session
+        response = view(request)
+        self.assertEqual(response.status_code, 201)
+
+    def test_regenerate_odk_token(self):
+        """
+        Test that ODK Tokens can be regenerated and old tokens
+        are set to Inactive after regeneration
+        """
+        view = ConnectViewSet.as_view({'post': 'odk_token'})
+        request = self.factory.post('/', **self.extra)
+        request.session = self.client.session
+        response = view(request)
+        self.assertEqual(response.status_code, 201)
+        old_token = response.data['odk_token']
+
+        with self.assertRaises(ODKToken.DoesNotExist):
+            ODKToken.objects.get(
+                user=self.user, status=ODKToken.INACTIVE)
+
+        request = self.factory.post('/', **self.extra)
+        request.session = self.client.session
+        response = view(request)
+        self.assertEqual(response.status_code, 201)
+        self.assertNotEqual(response.data['odk_token'], old_token)
+
+        # Test that the previous token was set to inactive
+        inactive_token = ODKToken.objects.get(
+            user=self.user, status=ODKToken.INACTIVE)
+        self.assertEqual(inactive_token.raw_key, old_token)
+
+    def test_retrieve_odk_token(self):
+        """
+        Test that ODK Tokens can be retrieved
+        """
+        view = ConnectViewSet.as_view({
+            'post': 'odk_token',
+            'get': 'odk_token'
+        })
+        request = self.factory.post('/', **self.extra)
+        request.session = self.client.session
+        response = view(request)
+        self.assertEqual(response.status_code, 201)
+        odk_token = response.data['odk_token']
+        expires = response.data['expires']
+
+        request = self.factory.get('/', **self.extra)
+        request.session = self.client.session
+        response = view(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['odk_token'], odk_token)
+        self.assertEqual(response.data['expires'], expires)
+
+    def test_deactivates_multiple_active_odk_token(self):
+        """
+        Test that the viewset deactivates tokens when two or more are
+        active at the same time and returns a new token
+        """
+        view = ConnectViewSet.as_view({
+            'post': 'odk_token',
+            'get': 'odk_token'
+        })
+
+        # Create two active tokens
+        token_1 = ODKToken.objects.create(user=self.user)
+        token_2 = ODKToken.objects.create(user=self.user)
+
+        self.assertEqual(token_1.status, ODKToken.ACTIVE)
+        self.assertEqual(token_2.status, ODKToken.ACTIVE)
+
+        # Test that the GET request deactivates the two active tokens
+        # and returns a new active token
+        request = self.factory.get('/', **self.extra)
+        request.session = self.client.session
+        response = view(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            len(ODKToken.objects.filter(status=ODKToken.ACTIVE)), 1)
+        self.assertNotEqual(response.data['odk_token'], token_1.raw_key)
+        self.assertNotEqual(response.data['odk_token'], token_2.raw_key)
+
+        token_1 = ODKToken.objects.get(pk=token_1.pk)
+        token_2 = ODKToken.objects.get(pk=token_2.pk)
+        token_3_key = response.data['odk_token']
+
+        self.assertEqual(token_1.status, ODKToken.INACTIVE)
+        self.assertEqual(token_2.status, ODKToken.INACTIVE)
+
+        # Test that the POST request deactivates two active tokens and returns
+        # a new active token
+
+        token_1.status = ODKToken.ACTIVE
+        token_1.save()
+
+        self.assertEqual(
+            len(ODKToken.objects.filter(status=ODKToken.ACTIVE)), 2)
+        request = self.factory.post('/', **self.extra)
+        request.session = self.client.session
+        response = view(request)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            len(ODKToken.objects.filter(status=ODKToken.ACTIVE)), 1)
+        self.assertNotEqual(response.data['odk_token'], token_1.raw_key)
+        self.assertNotEqual(response.data['odk_token'], token_3_key)

@@ -23,7 +23,8 @@ from future.utils import iteritems
 from future.utils import listvalues
 from guardian.models import GroupObjectPermissionBase, UserObjectPermissionBase
 from past.builtins import cmp
-from pyxform import SurveyElementBuilder, constants
+from pyxform import (
+    SurveyElementBuilder, constants, create_survey_element_from_dict)
 from pyxform.question import Question
 from pyxform.section import RepeatingSection
 from pyxform.xform2json import create_survey_element_from_xml
@@ -36,13 +37,14 @@ from onadata.libs.utils.cache_tools import (IS_ORG, PROJ_BASE_FORMS_CACHE,
                                             PROJ_FORMS_CACHE,
                                             PROJ_NUM_DATASET_CACHE,
                                             PROJ_SUB_DATE_CACHE, XFORM_COUNT,
-                                            safe_delete)
+                                            PROJ_OWNER_CACHE, safe_delete)
 from onadata.libs.utils.common_tags import (DURATION, ID, KNOWN_MEDIA_TYPES,
                                             MEDIA_ALL_RECEIVED, MEDIA_COUNT,
                                             NOTES, SUBMISSION_TIME,
                                             SUBMITTED_BY, TAGS, TOTAL_MEDIA,
                                             UUID, VERSION, REVIEW_STATUS,
-                                            REVIEW_COMMENT)
+                                            REVIEW_COMMENT,
+                                            MULTIPLE_SELECT_TYPE)
 from onadata.libs.utils.model_tools import queryset_iterator
 from onadata.libs.utils.mongo import _encode_for_mongo
 
@@ -162,7 +164,8 @@ def check_version_set(survey):
 
 
 def _expand_select_all_that_apply(d, key, e):
-    if e and e.bind.get(u"type") == u"select":
+    if e and e.bind.get(u"type") == u"string"\
+            and e.type == MULTIPLE_SELECT_TYPE:
         options_selected = d[key].split()
         for child in e.children:
             new_key = child.get_abbreviated_xpath()
@@ -436,7 +439,8 @@ class XFormMixin(object):
 
         # replace the single question column with a column for each
         # item in a select all that apply question.
-        if survey_element.bind.get(u'type') == u'select':
+        if survey_element.bind.get(u'type') == u'string' \
+                and survey_element.type == MULTIPLE_SELECT_TYPE:
             result.pop()
             for child in survey_element.children:
                 result.append('/'.join([path, child.name]))
@@ -474,7 +478,6 @@ class XFormMixin(object):
         """
         Return a list of headers for a csv file.
         """
-
         def shorten(xpath):
             xpath_list = xpath.split('/')
             return '/'.join(xpath_list[2:])
@@ -717,7 +720,8 @@ class XForm(XFormMixin, BaseModel):
     deleted_at = models.DateTimeField(blank=True, null=True)
     last_submission_time = models.DateTimeField(blank=True, null=True)
     has_start_time = models.BooleanField(default=False)
-    uuid = models.CharField(max_length=36, default=u'')
+    uuid = models.CharField(max_length=36, default=u'', db_index=True)
+    public_key = models.TextField(default='', blank=True, null=True)
 
     uuid_regex = re.compile(r'(<instance>.*?id="[^"]+">)(.*</instance>)(.*)',
                             re.DOTALL)
@@ -817,10 +821,17 @@ class XForm(XFormMixin, BaseModel):
     def _set_encrypted_field(self):
         if self.json and self.json != '':
             json_dict = json.loads(self.json)
-            if 'submission_url' in json_dict and 'public_key' in json_dict:
-                self.encrypted = True
-            else:
-                self.encrypted = False
+            self.encrypted = 'public_key' in json_dict
+
+    def _set_public_key_field(self):
+        if self.json and self.json != '':
+            if self.num_of_submissions == 0 and self.public_key:
+                json_dict = json.loads(self.json)
+                json_dict['public_key'] = self.public_key
+                survey = create_survey_element_from_dict(json_dict)
+                self.json = survey.to_json()
+                self.xml = survey.to_xml()
+                self._set_encrypted_field()
 
     def update(self, *args, **kwargs):
         super(XForm, self).save(*args, **kwargs)
@@ -854,7 +865,10 @@ class XForm(XFormMixin, BaseModel):
                     not re.search(r"^[\w-]+$", self.id_string):
                 raise XLSFormError(
                     _(u'In strict mode, the XForm ID must be a '
-                      'valid slug and contain no spaces.'))
+                      'valid slug and contain no spaces. Please ensure'
+                      ' that you have set an id_string in the settings sheet '
+                      'or have modified the filename to not contain'
+                      ' any spaces.'))
 
         if not self.sms_id_string and (update_fields is None or
                                        'id_string' in update_fields):
@@ -866,6 +880,9 @@ class XForm(XFormMixin, BaseModel):
                     'sms_keyword', self.id_string)
             except Exception:
                 self.sms_id_string = self.id_string
+
+        if update_fields is None or 'public_key' in update_fields:
+            self._set_public_key_field()
 
         if 'skip_xls_read' in kwargs:
             del kwargs['skip_xls_read']
@@ -1035,6 +1052,7 @@ pre_save.connect(save_project, sender=XForm, dispatch_uid='save_project_xform')
 
 def xform_post_delete_callback(sender, instance, **kwargs):
     if instance.project_id:
+        safe_delete('{}{}'.format(PROJ_OWNER_CACHE, instance.project_id))
         safe_delete('{}{}'.format(PROJ_FORMS_CACHE, instance.project_id))
         safe_delete('{}{}'.format(PROJ_BASE_FORMS_CACHE, instance.project.pk))
         safe_delete('{}{}'.format(PROJ_SUB_DATE_CACHE, instance.project_id))

@@ -2,12 +2,15 @@ import logging
 import os
 from hashlib import md5
 
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db.models import Count
+from django.utils.translation import ugettext as _
 from future.moves.urllib.parse import urlparse
 from future.utils import listvalues
 from requests.exceptions import ConnectionError
@@ -42,7 +45,8 @@ def _create_enketo_url(request, xform):
     :return: enketo url
     """
     form_url = get_form_url(request, xform.user.username,
-                            settings.ENKETO_PROTOCOL, xform_pk=xform.pk)
+                            settings.ENKETO_PROTOCOL, xform_pk=xform.pk,
+                            generate_consistent_urls=True)
     url = ""
 
     try:
@@ -73,6 +77,14 @@ def user_to_username(item):
     item['user'] = item['user'].username
 
     return item
+
+
+def clean_public_key(value):
+    if value.startswith('-----BEGIN PUBLIC KEY-----') and\
+            value.endswith('-----END PUBLIC KEY-----'):
+        return value.replace('-----BEGIN PUBLIC KEY-----',
+                             '').replace('-----END PUBLIC KEY-----',
+                                         '').replace(' ', '').rstrip()
 
 
 class XFormMixin(object):
@@ -224,6 +236,7 @@ class XFormBaseSerializer(XFormMixin, serializers.HyperlinkedModelSerializer):
             username__iexact=settings.ANONYMOUS_DEFAULT_USERNAME))
     public = serializers.BooleanField(source='shared')
     public_data = serializers.BooleanField(source='shared_data')
+    public_key = serializers.CharField(required=False)
     require_auth = serializers.BooleanField()
     tags = TagListSerializer(read_only=True)
     title = serializers.CharField(max_length=255)
@@ -261,6 +274,7 @@ class XFormSerializer(XFormMixin, serializers.HyperlinkedModelSerializer):
             username__iexact=settings.ANONYMOUS_DEFAULT_USERNAME))
     public = serializers.BooleanField(source='shared')
     public_data = serializers.BooleanField(source='shared_data')
+    public_key = serializers.CharField(required=False)
     require_auth = serializers.BooleanField()
     submission_count_for_today = serializers.ReadOnlyField()
     tags = TagListSerializer(read_only=True)
@@ -300,6 +314,20 @@ class XFormSerializer(XFormMixin, serializers.HyperlinkedModelSerializer):
 
         return xform_metadata
 
+    def validate_public_key(self, value):  # pylint: disable=no-self-use
+        """
+        Checks that the given RSA public key is a valid key by trying
+        to use the key data to create an RSA key object using the cryptography
+        package
+        """
+        try:
+            load_pem_public_key(
+                value.encode('utf-8'), backend=default_backend())
+        except ValueError:
+            raise serializers.ValidationError(
+                _('The public key is not a valid base64 RSA key'))
+        return clean_public_key(value)
+
     def get_form_versions(self, obj):
         versions = []
         if obj:
@@ -329,16 +357,11 @@ class XFormCreateSerializer(XFormSerializer):
 class XFormListSerializer(serializers.Serializer):
     formID = serializers.ReadOnlyField(source='id_string')
     name = serializers.ReadOnlyField(source='title')
-    version = serializers.SerializerMethodField()
+    version = serializers.ReadOnlyField()
     hash = serializers.ReadOnlyField()
     descriptionText = serializers.ReadOnlyField(source='description')
     downloadUrl = serializers.SerializerMethodField('get_url')
     manifestUrl = serializers.SerializerMethodField('get_manifest_url')
-
-    @check_obj
-    def get_version(self, obj):
-        if obj.version and obj.version.isdigit():
-            return obj.version
 
     @check_obj
     def get_url(self, obj):
